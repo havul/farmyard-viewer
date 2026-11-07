@@ -29,7 +29,7 @@ updateSky();
 const camera=new THREE.PerspectiveCamera(42,1,.1,300);
 camera.position.fromArray(P.camera.position);
 const renderer=new THREE.WebGLRenderer({canvas:$('sceneCanvas'),antialias:true,alpha:false,preserveDrawingBuffer:true,powerPreference:'high-performance'});
-renderer.setPixelRatio(Math.min(devicePixelRatio,2));renderer.outputColorSpace=THREE.SRGBColorSpace;
+renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));renderer.outputColorSpace=THREE.SRGBColorSpace;
 renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=1.2;
 renderer.shadowMap.enabled=true;renderer.shadowMap.type=THREE.PCFSoftShadowMap;
 const controls=new OrbitControls(camera,renderer.domElement);
