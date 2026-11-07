@@ -8,7 +8,7 @@ export const PROJECT = {
     // Keep null to use the built-in demo. Replace with your actual files in public/models/.
     scanPreview: null, // e.g. '/models/farm_scan_low.glb' (fast, low-detail)
     scanDetailed: null, // e.g. '/models/farm_scan_final.glb' (loads after preview)
-    construction: 'https://chfvssbrwdyjqecb.public.blob.vercel-storage.com/barn_animation.glb',
+    construction: `${import.meta.env.BASE_URL}models/barn_animation.glb`,
     environmentHDR: `${import.meta.env.BASE_URL}environments/meadow_2_4k.exr`,
   },
   environment: {
