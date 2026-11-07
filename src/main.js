@@ -38,7 +38,7 @@ controls.minDistance=P.camera.minDistance;controls.maxDistance=P.camera.maxDista
 controls.target.fromArray(P.camera.target);controls.update();
 scene.add(new THREE.HemisphereLight('#eef5ff','#64735e',2.15));
 const sun=new THREE.DirectionalLight('#fff0d4',3.0);
-sun.position.set(-30,48,26);sun.castShadow=true;sun.shadow.mapSize.set(2048,2048);
+sun.position.set(-30,48,26);sun.castShadow = window.innerWidth > 768;sun.shadow.mapSize.set(2048,2048);
 sun.shadow.camera.left=-65;sun.shadow.camera.right=65;sun.shadow.camera.top=65;sun.shadow.camera.bottom=-65;
 sun.shadow.normalBias=.035;scene.add(sun);
 const grid=new THREE.GridHelper(100,50,'#ccd5ca','#adbcb3');grid.position.y=-.035;grid.visible=false;scene.add(grid);
