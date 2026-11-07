@@ -9,7 +9,7 @@ export const PROJECT = {
     scanPreview: null, // e.g. '/models/farm_scan_low.glb' (fast, low-detail)
     scanDetailed: null, // e.g. '/models/farm_scan_final.glb' (loads after preview)
     construction: `${import.meta.env.BASE_URL}models/barn_animation.glb`,
-    environmentHDR: null,
+    environmentHDR: `${import.meta.env.BASE_URL}environments/meadow_2_4k.exr`,
   },
   environment: {
     showBackground: true, // UI toggle hides sky image, but NEVER disables HDR illumination
