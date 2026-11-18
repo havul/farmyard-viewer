@@ -22,6 +22,7 @@ export const PROJECT = {
     // Calibrate groundY to Barnscape terrain height if needed.
     groundedSkybox: {
       enabled: true,
+      brightness: 1.45, // grounded HDR only; 1.0 = original, 1.45 = 45% brighter
       height: 15,
       radius: 230,
       groundY: -2.3,

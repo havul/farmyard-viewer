@@ -79,26 +79,6 @@ $('hdrBrightness').value=String(Math.round(hdrLevel*100));
 applyLighting();
 function showStatus(t){$('loadingStatus').textContent=t;}
 function place(root,spec){root.position.fromArray(spec.position);root.rotation.set(...spec.rotation);root.scale.setScalar(spec.scale);root.traverse(o=>{if(o.isMesh){o.castShadow=true;o.receiveShadow=true;}});}
-// Only Barnscape becomes matte; do not modify shared material instances.
-function makeLandscapeMatte(root){
-  const copies=new Map();
-  root.traverse(o=>{
-    if(!o.isMesh || !o.material)return;
-    const matte=original=>{
-      if(!original)return original;
-      if(copies.has(original))return copies.get(original);
-      const m=original.clone();
-      // Preserve texture, transparency, normals, and material colour.
-      if('roughness' in m)m.roughness=1;
-      if('metalness' in m)m.metalness=0;
-      if('envMapIntensity' in m)m.envMapIntensity=0;
-      m.needsUpdate=true;
-      copies.set(original,m);
-      return m;
-    };
-    o.material=Array.isArray(o.material)?o.material.map(matte):matte(o.material);
-  });
-}
 function makeGroundedBackground(texture){
   if(groundedSkybox){scene.remove(groundedSkybox);groundedSkybox.geometry.dispose();groundedSkybox.material.dispose();groundedSkybox=null;}
   if(!P.environment.groundedSkybox?.enabled)return;
@@ -106,6 +86,9 @@ function makeGroundedBackground(texture){
   groundedSkybox=new GroundedSkybox(texture,height,radius);
   groundedSkybox.position.set(centerX,groundY+height,centerZ);
   groundedSkybox.renderOrder=-1000;
+  // Brighten only the *visible* grounded panorama; preserve HDR lighting strength.
+  // Values above 1 are supported for the material tint in linear colour space.
+  groundedSkybox.material.color.setScalar(Math.max(0, P.environment.groundedSkybox.brightness ?? 1.45));
   groundedSkybox.material.depthWrite=false;
   groundedSkybox.material.fog=false;
   groundedSkybox.frustumCulled=false;
@@ -300,7 +283,6 @@ async function initializeAssets(){
 function initLandscapeAnimation(gltf){
   if(landscapeModel){forgetMaterials(landscapeModel);landscapeRoot.remove(landscapeModel);}
   landscapeModel=gltf.scene;
-  makeLandscapeMatte(landscapeModel);
   place(landscapeModel,P.placement.landscape);
   landscapeRoot.add(landscapeModel);
   if(landscapeMixer){landscapeMixer.stopAllAction();landscapeMixer.uncacheRoot(landscapeMixer.getRoot());}
