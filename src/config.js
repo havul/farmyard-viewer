@@ -26,14 +26,14 @@ export const PROJECT = {
   placement: {
     landscape: { position: [0, 0, 0], rotation: [0, 0, 0], scale: 1 },
     scan: { position: [0, 0, 0], rotation: [0, 0, 0], scale: 1 },
-    construction: { position: [6, 2.5, 15], rotation: [0, Math.PI, 0], scale: 1 }, // preserve your measured position from current live config
+    construction: { position: [6, -2.5, -15], rotation: [0, Math.PI, 0], scale: 1 }, // preserve your measured position from current live config
   },
 camera: {
   position: [-12.44, 16.99, 27.01],
   target: [9.12, 1.35, 8.15],
   minDistance: 5,
   maxDistance: 140},
-  
+
   constructionAnimation: {
     clipName: null, // null = ALL exported clips; set a name to play only one clip
     startFrame: 50,  // Barn begins after Remove Trailer; GLB original frame 0 maps here
