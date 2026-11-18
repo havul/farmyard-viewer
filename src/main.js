@@ -460,7 +460,29 @@ const boundaryRaycaster=new THREE.Raycaster();
 const pointerNDC=new THREE.Vector2();
 const boundaries=[];
 let activeBoundary=null, boundaryTool=false, draggingPoint=null, pointerStart=null;
-const BOUNDARY_COLOR=0x67ffdc;
+const BOUNDARY_COLOR=0x9f2436;
+const BOUNDARY_DEFAULT='#9f2436';
+let boundarySerial=0;
+const boundaryColors=['#9f2436','#df703c','#e6bf57','#28ada1','#6b8de3','#a568db','#f5f5f5'];
+function boundaryKind(b){return b.points.length===1?'marker':b.points.length===2?'distance':'area';}
+function boundaryColour(b){return b.color||BOUNDARY_DEFAULT;}
+function updateFinishButton(){
+ const n=activeBoundary?.points.length||0;
+ const btn=$('finishBoundaryBtn');
+ btn.disabled=n===0;
+ btn.textContent=n<=1?'Place marker':n===2?'Measure distance':'Finish shape';
+ $('boundaryModeText').textContent=n?`Drawing · ${n} point${n===1?'':'s'}`:'Draw marker, distance or area';
+}
+function finishBoundary(){
+ if(!activeBoundary||!activeBoundary.points.length)return;
+ const b=activeBoundary;
+ b.closed=true;
+ activeBoundary=null;
+ rebuildBoundary(b);
+ showBoundaryCoords(b.points[b.points.length-1]);
+ setBoundaryTool(false);
+}
+
 function anchorWorld(a){return a.mesh.localToWorld(a.local.clone());}
 function surfaceHit(clientX,clientY){
   const r=renderer.domElement.getBoundingClientRect();
@@ -517,62 +539,93 @@ function boundaryArea(points){
   }
   return area;
 }
-// Context menu for finished boundary labels; available without drawing mode.
+// Context menu for any finished marker, distance or area.
 const boundaryMenu=document.createElement('div');
 boundaryMenu.className='boundary-context-menu';
 boundaryMenu.hidden=true;
-boundaryMenu.innerHTML='<button type="button" class="boundary-delete">Delete boundary?</button><button type="button" class="boundary-dismiss">Cancel</button>';
+boundaryMenu.innerHTML=`<button type="button" class="boundary-rename">Rename…</button>
+<div class="boundary-color-title">Colour</div><div class="boundary-color-swatches"></div>
+<label class="boundary-color-picker-label">Custom colour <input class="boundary-color-picker" type="color" value="#9f2436"></label>
+<button type="button" class="boundary-delete">Delete?</button><button type="button" class="boundary-dismiss">Cancel</button>`;
 viewport.appendChild(boundaryMenu);
+const swatches=boundaryMenu.querySelector('.boundary-color-swatches');
+for(const color of boundaryColors){
+ const btn=document.createElement('button');btn.type='button';btn.className='boundary-swatch';btn.title=color;
+ btn.style.background=color;btn.setAttribute('aria-label',`Set colour ${color}`);
+ btn.addEventListener('click',()=>{if(boundaryMenuTarget){boundaryMenuTarget.color=color;rebuildBoundary(boundaryMenuTarget);}hideBoundaryMenu();});
+ swatches.appendChild(btn);
+}
 let boundaryMenuTarget=null;
 function hideBoundaryMenu(){boundaryMenu.hidden=true;boundaryMenuTarget=null;}
 function showBoundaryMenu(e,b){
-  if(!b.closed)return;
-  e.preventDefault();e.stopPropagation();boundaryMenuTarget=b;
-  const rect=viewport.getBoundingClientRect();
-  boundaryMenu.hidden=false;
-  const w=boundaryMenu.offsetWidth||155,h=boundaryMenu.offsetHeight||80;
-  boundaryMenu.style.left=Math.max(6,Math.min(e.clientX-rect.left,rect.width-w-6))+'px';
-  boundaryMenu.style.top=Math.max(6,Math.min(e.clientY-rect.top,rect.height-h-6))+'px';
+ if(!b.closed)return;
+ e.preventDefault();e.stopPropagation();boundaryMenuTarget=b;
+ const rect=viewport.getBoundingClientRect();
+ boundaryMenu.hidden=false;
+ boundaryMenu.querySelector('.boundary-color-picker').value=boundaryColour(b);
+ const w=boundaryMenu.offsetWidth||210,h=boundaryMenu.offsetHeight||250;
+ boundaryMenu.style.left=Math.max(6,Math.min(e.clientX-rect.left,rect.width-w-6))+'px';
+ boundaryMenu.style.top=Math.max(6,Math.min(e.clientY-rect.top,rect.height-h-6))+'px';
 }
+boundaryMenu.querySelector('.boundary-rename').addEventListener('click',()=>{
+ const b=boundaryMenuTarget;if(!b)return;
+ const name=window.prompt('Name this measurement:',b.name||`Boundary ${b.id}`);
+ if(name!==null){b.name=name.trim().slice(0,80)||`Boundary ${b.id}`;rebuildBoundary(b);}hideBoundaryMenu();
+});
+boundaryMenu.querySelector('.boundary-color-picker').addEventListener('input',e=>{
+ if(boundaryMenuTarget){boundaryMenuTarget.color=e.target.value;rebuildBoundary(boundaryMenuTarget);}
+});
 boundaryMenu.querySelector('.boundary-delete').addEventListener('click',()=>{
-  if(boundaryMenuTarget)removeBoundary(boundaryMenuTarget);
-  hideBoundaryMenu();
+ if(boundaryMenuTarget)removeBoundary(boundaryMenuTarget);
+ hideBoundaryMenu();
 });
 boundaryMenu.querySelector('.boundary-dismiss').addEventListener('click',hideBoundaryMenu);
 document.addEventListener('pointerdown',e=>{
-  if(!boundaryMenu.hidden && !boundaryMenu.contains(e.target))hideBoundaryMenu();
+ if(!boundaryMenu.hidden && !boundaryMenu.contains(e.target))hideBoundaryMenu();
 },true);
 function updateBoundaryLabel(b,coords){
-  if(!b.closed || coords.length<3)return;
-  if(!b.label){
-    b.label=document.createElement('div');
-    b.label.className='boundary-stat-label';
-    b.label.setAttribute('role','status');
-    b.label.title='Right-click for boundary options';
-    b.label.addEventListener('contextmenu',e=>showBoundaryMenu(e,b));
-    $('boundaryLabels').appendChild(b.label);
-  }
-  const center=boundaryCentroid(coords),gps=boundaryGPS(center);
-  b.center=center;
-  b.label.innerHTML='<strong>BOUNDARY '+String(boundaries.indexOf(b)+1).padStart(2,'0')+'</strong>'+
-    '<span>'+boundaryArea(coords).toFixed(2)+' m² · surface area (approx.)</span>'+
-    '<span>'+gps.latitude.toFixed(6)+', '+gps.longitude.toFixed(6)+'</span>';
-  b.label.title='Estimated GPS using scene origin; metres and north alignment must be calibrated';
+ if(!b.closed||!coords.length)return;
+ if(!b.label){
+   b.label=document.createElement('div');
+   b.label.className='boundary-stat-label';
+   b.label.setAttribute('role','button');
+   b.label.tabIndex=0;
+   b.label.title='Right-click or long-press for options';
+   b.label.addEventListener('contextmenu',e=>showBoundaryMenu(e,b));
+   b.label.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){showBoundaryMenu({preventDefault(){},stopPropagation(){},clientX:viewport.getBoundingClientRect().left+viewport.clientWidth/2,clientY:viewport.getBoundingClientRect().top+viewport.clientHeight/2},b);}});
+   let longPress=null;
+   b.label.addEventListener('pointerdown',e=>{if(e.pointerType==='touch')longPress=setTimeout(()=>{showBoundaryMenu(e,b);longPress=null;},550);});
+   for(const ev of ['pointerup','pointercancel','pointermove'])b.label.addEventListener(ev,()=>{clearTimeout(longPress);longPress=null;});
+   $('boundaryLabels').appendChild(b.label);
+ }
+ const center=boundaryCentroid(coords),gps=boundaryGPS(center);
+ b.center=center;
+ b.label.replaceChildren();
+ const heading=document.createElement('strong');heading.textContent=b.name||`Boundary ${String(b.id||1).padStart(2,'0')}`;
+ heading.style.color=boundaryColour(b);
+ const metric=document.createElement('span');
+ if(coords.length===1){metric.textContent='Point marker · '+formatPoint(coords[0]);}
+ else if(coords.length===2){metric.textContent=`Distance: ${coords[0].distanceTo(coords[1]).toFixed(2)} m`;}
+ else{metric.textContent=`${boundaryArea(coords).toFixed(2)} m² · area (approx.)`;}
+ const gpsLine=document.createElement('span');gpsLine.textContent=`${gps.latitude.toFixed(6)}, ${gps.longitude.toFixed(6)} (estimated)`;
+ b.label.append(heading,metric,gpsLine);
+ b.label.style.borderColor=boundaryColour(b);
+ b.label.title='Estimated GPS (scene origin and north alignment require calibration). Right-click or long-press for options.';
 }
 function rebuildBoundary(b){
   // Regenerate only when geometry or animated positions change.
   for(const line of b.lines){boundaryRoot.remove(line);line.geometry.dispose();line.material.dispose();}
   b.lines=[];
   const coords=b.points.map(anchorWorld);
-  b.handles.forEach((handle,i)=>{handle.position.copy(coords[i]);handle.visible=boundaryTool;});
+  b.handles.forEach((handle,i)=>{handle.position.copy(coords[i]);handle.visible=boundaryTool;handle.material.color.set(boundaryColour(b));handle.scale.setScalar(i===0?1.6:1);});
   updateBoundaryLabel(b,coords);
   if(coords.length<2)return;
   const path=coords.map(v=>v.clone().add(new THREE.Vector3(0,.025,0)));
-  if(b.closed)path.push(path[0].clone());
+  if(b.closed && coords.length>=3)path.push(path[0].clone());
   for(let i=0;i<path.length-1;i++){
     const a=path[i],z=path[i+1];if(a.distanceToSquared(z)<1e-10)continue;
     const segment=new THREE.LineCurve3(a,z);
-    for(const [radius,color,opacity] of [[.057,0x2ae8c2,.18],[.015,BOUNDARY_COLOR,.95]]){
+    for(const [radius,color,opacity] of [[.112,boundaryColour(b),.21],[.031,boundaryColour(b),.97]]){
       const geometry=new THREE.TubeGeometry(segment,1,radius,5,false);
       const material=new THREE.MeshBasicMaterial({color,transparent:true,opacity,depthTest:false,depthWrite:false});
       const mesh=new THREE.Mesh(geometry,material);mesh.renderOrder=700;
@@ -601,20 +654,34 @@ function animateBoundaryLines(now){
 }
 function addBoundaryPoint(b,hit){
   const anchor={mesh:hit.mesh,local:hit.local.clone()};b.points.push(anchor);
-  const handle=new THREE.Mesh(new THREE.SphereGeometry(.16,12,8),new THREE.MeshBasicMaterial({color:BOUNDARY_COLOR,depthTest:false}));
+  const handle=new THREE.Mesh(new THREE.SphereGeometry(.25,14,10),new THREE.MeshBasicMaterial({color:boundaryColour(b),depthTest:false}));
   handle.userData.boundary=b;handle.userData.anchorIndex=b.points.length-1;handle.renderOrder=710;
-  handle.position.copy(hit.world);boundaryRoot.add(handle);b.handles.push(handle);rebuildBoundary(b);showBoundaryCoords(anchor);
+  handle.position.copy(hit.world);boundaryRoot.add(handle);b.handles.push(handle);rebuildBoundary(b);showBoundaryCoords(anchor);updateFinishButton();
 }
-function removeBoundary(b){if(boundaryMenuTarget===b)hideBoundaryMenu();for(const handle of b.handles){boundaryRoot.remove(handle);handle.geometry.dispose();handle.material.dispose();}for(const line of b.lines){boundaryRoot.remove(line);line.geometry.dispose();line.material.dispose();}const i=boundaries.indexOf(b);if(i>=0)boundaries.splice(i,1);if(b.label)b.label.remove();if(activeBoundary===b)activeBoundary=null;}
-function cancelBoundary(){if(activeBoundary){removeBoundary(activeBoundary);activeBoundary=null;}showBoundaryCoords(null);setBoundaryTool(false);}
+function removeBoundary(b){if(boundaryMenuTarget===b)hideBoundaryMenu();for(const handle of b.handles){boundaryRoot.remove(handle);handle.geometry.dispose();handle.material.dispose();}for(const line of b.lines){boundaryRoot.remove(line);line.geometry.dispose();line.material.dispose();}for(const a of b.points){if(a.mesh?.userData?.boundaryFallback && a.mesh.parent===scene)scene.remove(a.mesh);}const i=boundaries.indexOf(b);if(i>=0)boundaries.splice(i,1);if(b.label)b.label.remove();if(activeBoundary===b)activeBoundary=null;}
+function cancelBoundary(){if(activeBoundary){removeBoundary(activeBoundary);activeBoundary=null;}showBoundaryCoords(null);setBoundaryTool(false);updateFinishButton();}
 function setBoundaryTool(on){boundaryTool=on;controls.enabled=!on;$('boundaryBtn').classList.toggle('active',on);$('boundaryBtn').setAttribute('aria-pressed',String(on));$('boundaryHud').hidden=!on;renderer.domElement.style.cursor=on?'crosshair':'';if(!on && activeBoundary){removeBoundary(activeBoundary);activeBoundary=null;}for(const b of boundaries)b.handles.forEach(h=>h.visible=on);}
 $('boundaryBtn').addEventListener('click',()=>setBoundaryTool(!boundaryTool));
+$('finishBoundaryBtn').addEventListener('click',finishBoundary);
+updateFinishButton();
 $('clearBoundariesBtn').addEventListener('click',()=>{for(const b of [...boundaries])removeBoundary(b);showBoundaryCoords(null);});
 function pickHandle(clientX,clientY){
-  const r=renderer.domElement.getBoundingClientRect();pointerNDC.set((clientX-r.left)/r.width*2-1,-(clientY-r.top)/r.height*2+1);
-  boundaryRaycaster.setFromCamera(pointerNDC,camera);
-  const handles=boundaries.flatMap(b=>b.handles).filter(h=>h.visible);
-  const hit=boundaryRaycaster.intersectObjects(handles,false)[0];return hit?.object||null;
+ const rect=renderer.domElement.getBoundingClientRect();
+ const tolerance=(window.matchMedia('(pointer:coarse)').matches?32:19);
+ let closest=null,best=tolerance*tolerance;
+ for(const b of boundaries)for(const h of b.handles){
+   if(!h.visible)continue;
+   const p=h.position.clone().project(camera);
+   if(p.z < -1 || p.z > 1)continue;
+   const x=rect.left+(p.x+1)*rect.width/2;
+   const y=rect.top+(1-p.y)*rect.height/2;
+   const d=(x-clientX)**2+(y-clientY)**2;
+   const threshold=b===activeBoundary&&h.userData.anchorIndex===0?tolerance*1.5:tolerance;
+   if(d<threshold*threshold && (closest===null||d<best||h.userData.anchorIndex===0&&b===activeBoundary)){
+      closest=h;best=d;
+   }
+ }
+ return closest;
 }
 const canvas=renderer.domElement;
 canvas.addEventListener('contextmenu',e=>{if(!boundaryTool)return;e.preventDefault();if(activeBoundary){cancelBoundary();return;}const handle=pickHandle(e.clientX,e.clientY);if(handle)removeBoundary(handle.userData.boundary);});
@@ -623,12 +690,12 @@ canvas.addEventListener('pointerdown',e=>{
   e.preventDefault();e.stopPropagation();
   pointerStart={x:e.clientX,y:e.clientY};
   const handle=pickHandle(e.clientX,e.clientY);
-  if(handle && activeBoundary && handle.userData.boundary===activeBoundary && handle.userData.anchorIndex===0 && activeBoundary.points.length>=3){
-    activeBoundary.closed=true;rebuildBoundary(activeBoundary);activeBoundary=null;setBoundaryTool(false);return;
+  if(handle && activeBoundary && handle.userData.boundary===activeBoundary && handle.userData.anchorIndex===0){
+    finishBoundary();return;
   }
   if(handle && !activeBoundary){draggingPoint=handle;canvas.setPointerCapture(e.pointerId);return;}
   const hit=surfaceHit(e.clientX,e.clientY);if(!hit)return;
-  if(!activeBoundary){activeBoundary={points:[],handles:[],lines:[],closed:false};boundaries.push(activeBoundary);$('boundaryModeText').textContent='Creating boundary';}
+  if(!activeBoundary){activeBoundary={id:++boundarySerial,name:'',color:BOUNDARY_DEFAULT,points:[],handles:[],lines:[],closed:false};boundaries.push(activeBoundary);updateFinishButton();}
   addBoundaryPoint(activeBoundary,hit);
 });
 canvas.addEventListener('pointermove',e=>{
@@ -640,6 +707,97 @@ canvas.addEventListener('pointermove',e=>{
 });
 for(const n of ['pointerup','pointercancel'])canvas.addEventListener(n,()=>{draggingPoint=null;pointerStart=null;});
 function updateBoundaries(){for(const b of boundaries)rebuildBoundary(b);}
+// Portable one-line export. Mesh references use stable scene-root + child-index paths.
+// World coordinates are stored as fallback for older or differently exported GLBs.
+function encodeBoundaryAnchor(a){
+ const roots={landscape:landscapeRoot,scan:baseScan,barn:buildRoot};
+ let rootName=null,indices=[];
+ for(const [name,root] of Object.entries(roots)){
+   let obj=a.mesh,path=[];
+   while(obj&&obj!==root){const parent=obj.parent;if(!parent)break;path.unshift(parent.children.indexOf(obj));obj=parent;}
+   if(obj===root){rootName=name;indices=path;break;}
+ }
+ return {root:rootName,path:indices,meshName:a.mesh.name,local:a.local.toArray(),world:anchorWorld(a).toArray()};
+}
+function decodeBoundaryAnchor(a){
+ const roots={landscape:landscapeRoot,scan:baseScan,barn:buildRoot};
+ let mesh=roots[a.root];
+ if(mesh && Array.isArray(a.path))for(const index of a.path){mesh=mesh?.children[index];}
+ if(!mesh?.isMesh && roots[a.root]){
+   roots[a.root].traverse(obj=>{if(!mesh?.isMesh && obj.isMesh&&obj.name===a.meshName)mesh=obj;});
+ }
+ if(mesh?.isMesh && a.local?.length===3)return {mesh,local:new THREE.Vector3(...a.local)};
+ // Detached fallback allows geometry to remain visible if a mesh has been renamed.
+ const point=new THREE.Vector3(...a.world);
+ const holder=new THREE.Object3D();holder.position.copy(point);holder.userData.boundaryFallback=true;scene.add(holder);
+ return {mesh:holder,local:new THREE.Vector3()};
+}
+function exportBoundaryData(){
+ const data={version:1,origin:GEO_ORIGIN,shapes:boundaries.filter(b=>b.closed).map(b=>({
+   id:b.id,name:b.name||'',color:boundaryColour(b),points:b.points.map(encodeBoundaryAnchor)
+ }))};
+ const bytes=new TextEncoder().encode(JSON.stringify(data));
+ let bin='';for(const byte of bytes)bin+=String.fromCharCode(byte);
+ return 'FVB1:'+btoa(bin);
+}
+function importBoundaryData(code){
+ const trimmed=code.trim();if(!trimmed.startsWith('FVB1:'))throw Error('Invalid code: expected FVB1 prefix.');
+ let data;
+ try{
+  const bin=atob(trimmed.slice(5));
+  const bytes=Uint8Array.from(bin,c=>c.charCodeAt(0));
+  data=JSON.parse(new TextDecoder().decode(bytes));
+ }catch{throw Error('Invalid or damaged boundary code.');}
+ if(data.version!==1||!Array.isArray(data.shapes)||data.shapes.length>300)throw Error('Unsupported or oversized boundary data.');
+ const staged=[];
+ try{
+  for(const item of data.shapes){
+   if(!Array.isArray(item.points)||item.points.length<1||item.points.length>500)throw Error('Invalid number of points.');
+   const b={id:Number.isFinite(item.id)?item.id:++boundarySerial,name:String(item.name||'').slice(0,80),
+     color:/^#[0-9a-fA-F]{6}$/.test(item.color)?item.color:BOUNDARY_DEFAULT,
+     points:[],handles:[],lines:[],closed:true};
+   for(const p of item.points){
+     if(!Array.isArray(p.world)||p.world.length!==3||!p.world.every(Number.isFinite))throw Error('Invalid point coordinates.');
+     b.points.push(decodeBoundaryAnchor(p));
+   }
+   staged.push(b);
+  }
+ }catch(err){for(const b of staged)for(const a of b.points)if(a.mesh?.userData?.boundaryFallback&&a.mesh.parent===scene)scene.remove(a.mesh);throw err;}
+ if(activeBoundary)cancelBoundary();
+ for(const b of [...boundaries])removeBoundary(b);
+ for(const b of staged){boundarySerial=Math.max(boundarySerial,b.id);boundaries.push(b);
+   b.points.forEach((a,i)=>{
+     const h=new THREE.Mesh(new THREE.SphereGeometry(.25,14,10),new THREE.MeshBasicMaterial({color:boundaryColour(b),depthTest:false}));
+     h.userData.boundary=b;h.userData.anchorIndex=i;h.renderOrder=710;boundaryRoot.add(h);b.handles.push(h);
+   });rebuildBoundary(b);
+ }
+ setBoundaryTool(false);
+ return staged.length;
+}
+function openBoundaryIO(mode){
+ hideBoundaryMenu();
+ $('boundaryIOModal').hidden=false;
+ $('boundaryIOTitle').textContent=mode==='export'?'Export boundaries':'Import boundaries';
+ $('boundaryIOText').value=mode==='export'?exportBoundaryData():'';
+ $('boundaryIOText').readOnly=mode==='export';
+ $('boundaryIOCopy').hidden=mode!=='export';
+ $('boundaryIOApply').hidden=mode!=='import';
+ $('boundaryIOStatus').textContent=mode==='import'?'Import replaces all current measurements. Import only codes you trust.':'Copy this code to restore all current measurements later.';
+ $('boundaryIOText').focus();
+}
+$('boundaryIOBtn').addEventListener('click',()=>{$('boundaryIODropdown').hidden=!$('boundaryIODropdown').hidden;});
+$('boundaryIOExportBtn').addEventListener('click',()=>{$('boundaryIODropdown').hidden=true;openBoundaryIO('export');});
+$('boundaryIOImportBtn').addEventListener('click',()=>{$('boundaryIODropdown').hidden=true;openBoundaryIO('import');});
+$('boundaryIOClose').addEventListener('click',()=>{$('boundaryIOModal').hidden=true;});
+$('boundaryIOModal').addEventListener('click',e=>{if(e.target===$('boundaryIOModal'))$('boundaryIOModal').hidden=true;});
+$('boundaryIOCopy').addEventListener('click',async()=>{
+ try{await navigator.clipboard.writeText($('boundaryIOText').value);$('boundaryIOStatus').textContent='Copied to clipboard.';}
+ catch{$('boundaryIOText').select();$('boundaryIOStatus').textContent='Select and copy the highlighted code.';}
+});
+$('boundaryIOApply').addEventListener('click',()=>{
+ try{const n=importBoundaryData($('boundaryIOText').value);$('boundaryIOStatus').textContent=`Imported ${n} measurements.`;$('boundaryIOModal').hidden=true;}
+ catch(err){$('boundaryIOStatus').textContent=err.message;}
+});
 controls.addEventListener('start',()=>navMove=null);
 function dismissPanel(){selectedPoi=null;$('infoPanel').hidden=true;document.querySelectorAll('.poi').forEach(b=>b.classList.remove('selected'));}
 $('closePanel').addEventListener('click',dismissPanel);

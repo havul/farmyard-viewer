@@ -110,3 +110,25 @@
  background:#203e3d;color:#e8f9f0;padding:9px 10px;text-align:left;font-size:12px}
 .boundary-context-menu .boundary-delete{color:#ffd4d4;border-color:#9c5e64}
 .boundary-context-menu button:hover{background:#345a53}
+
+/* V12 surface measurement controls */
+.boundary-hud-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:7px}
+.boundary-hud-actions button{padding:10px 12px;border-radius:8px;border:1px solid #a85e65;background:#3c2229;color:#fff;font-weight:750;min-height:42px}
+.boundary-hud-actions button:disabled{opacity:.4;cursor:not-allowed}
+.boundary-hud-actions .boundary-finish{background:#9f2436;color:white;flex:1}
+.boundary-stat-label{border-width:2px}
+.boundary-stat-label strong{color:#ff9fab}
+.boundary-color-title{font:700 11px system-ui;color:#cbd8d7;padding:4px}
+.boundary-color-swatches{display:flex;gap:5px;flex-wrap:wrap;padding:3px}
+.boundary-color-swatches .boundary-swatch{width:26px;height:26px;border:2px solid #c5d8d1;border-radius:50%;padding:0;min-width:0}
+.boundary-color-picker-label{display:flex;align-items:center;justify-content:space-between;font-size:12px;padding:4px;color:white}
+.boundary-color-picker{width:42px;height:30px;background:transparent;border:0}
+.boundary-io-holder{position:relative}
+.boundary-io-dropdown{position:absolute;top:calc(100% + 6px);right:0;z-index:80;min-width:192px;background:#142a31;border:1px solid #5f8c82;border-radius:10px;padding:6px;box-shadow:0 10px 30px #0009}
+.boundary-io-dropdown button{display:block;width:100%;background:transparent;color:#e7f9ee;text-align:left;border:0;padding:11px 9px;border-radius:6px}
+.boundary-io-dropdown button:hover{background:#34534b}
+.boundary-io-modal textarea{display:block;width:100%;resize:vertical;min-height:120px;background:#0e1e25;color:#c9fbe3;border:1px solid #476e67;border-radius:7px;padding:10px;font:12px/1.5 ui-monospace,monospace;overflow-wrap:anywhere}
+.boundary-io-actions{display:flex;gap:9px;flex-wrap:wrap;align-items:center;margin-top:10px}
+.boundary-io-actions button{padding:10px 14px;border:1px solid #5b837a;border-radius:7px;background:#253e42;color:white}
+.boundary-io-actions .focus-btn{background:#9eecd0;color:#14372e}
+@media(max-width:760px){.boundary-hud-actions button{min-height:48px}.boundary-io-dropdown{right:-45px}.boundary-stat-label{max-width:180px;white-space:normal}}
