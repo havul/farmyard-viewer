@@ -26,7 +26,7 @@ export const PROJECT = {
   placement: {
     landscape: { position: [0, 0, 0], rotation: [0, 0, 0], scale: 1 },
     scan: { position: [0, 0, 0], rotation: [0, 0, 0], scale: 1 },
-    construction: { position: [50, 0, 20], rotation: [0, Math.PI, 0], scale: 1 },
+    construction: { position: [25, -2, 10], rotation: [0, Math.PI, 0], scale: 1 },
   },
   camera: { position: [36, 26, 38], target: [0, 3, 0], minDistance: 5, maxDistance: 140 },
   constructionAnimation: {
