@@ -5,6 +5,7 @@ import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 import { KTX2Loader } from 'three/addons/loaders/KTX2Loader.js';
 import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
 import { EXRLoader } from 'three/addons/loaders/EXRLoader.js';
+import { GroundedSkybox } from 'three/addons/objects/GroundedSkybox.js';
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 import { PROJECT as P } from './config.js';
 import { createDemoSite, createDemoBarn } from './demo.js';
@@ -15,18 +16,24 @@ $('projectTitle').textContent='Barn Construction - Interactive Timeline';
 $('timelineSlider').max=P.frameCount;
 const scene=new THREE.Scene();
 const solidBackground=new THREE.Color(P.environment.backgroundColor);
-let hdrTexture=null, showSky=P.environment.showBackground;
+let hdrTexture=null, groundedSkybox=null, showSky=P.environment.showBackground;
 scene.background=solidBackground;
 scene.fog=new THREE.Fog(P.environment.backgroundColor,90,190);
 function updateSky(){
   // Never touch scene.environment here: hiding the image must NOT remove HDR illumination.
-  scene.background=(showSky && hdrTexture)?hdrTexture:solidBackground;
+  // Keep IBL lighting independent of background visibility.
+  if(groundedSkybox){
+    groundedSkybox.visible=showSky;
+    scene.background=solidBackground;
+  }else{
+    scene.background=(showSky && hdrTexture)?hdrTexture:solidBackground;
+  }
   $('skyBtn').classList.toggle('active',showSky);
   $('skyBtn').setAttribute('aria-pressed',String(showSky));
-  $('skyBtn').title=hdrTexture?'Toggle visible HDR sky (lighting stays enabled)':'Add an HDR file in config.js to display the sky';
+  $('skyBtn').title=hdrTexture?'Toggle grounded HDR background (lighting stays enabled)':'Add an HDR file in config.js to display the sky';
 }
 updateSky();
-const camera=new THREE.PerspectiveCamera(42,1,.1,300);
+const camera=new THREE.PerspectiveCamera(42,1,.1,700);
 camera.position.fromArray(P.camera.position);
 const renderer=new THREE.WebGLRenderer({canvas:$('sceneCanvas'),antialias:true,alpha:false,preserveDrawingBuffer:true,powerPreference:'high-performance'});
 renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,window.innerWidth<=768?1.25:2));renderer.outputColorSpace=THREE.SRGBColorSpace;
@@ -72,6 +79,38 @@ $('hdrBrightness').value=String(Math.round(hdrLevel*100));
 applyLighting();
 function showStatus(t){$('loadingStatus').textContent=t;}
 function place(root,spec){root.position.fromArray(spec.position);root.rotation.set(...spec.rotation);root.scale.setScalar(spec.scale);root.traverse(o=>{if(o.isMesh){o.castShadow=true;o.receiveShadow=true;}});}
+// Only Barnscape becomes matte; do not modify shared material instances.
+function makeLandscapeMatte(root){
+  const copies=new Map();
+  root.traverse(o=>{
+    if(!o.isMesh || !o.material)return;
+    const matte=original=>{
+      if(!original)return original;
+      if(copies.has(original))return copies.get(original);
+      const m=original.clone();
+      // Preserve texture, transparency, normals, and material colour.
+      if('roughness' in m)m.roughness=1;
+      if('metalness' in m)m.metalness=0;
+      if('envMapIntensity' in m)m.envMapIntensity=0;
+      m.needsUpdate=true;
+      copies.set(original,m);
+      return m;
+    };
+    o.material=Array.isArray(o.material)?o.material.map(matte):matte(o.material);
+  });
+}
+function makeGroundedBackground(texture){
+  if(groundedSkybox){scene.remove(groundedSkybox);groundedSkybox.geometry.dispose();groundedSkybox.material.dispose();groundedSkybox=null;}
+  if(!P.environment.groundedSkybox?.enabled)return;
+  const {height=15,radius=230,groundY=0,centerX=0,centerZ=0}=P.environment.groundedSkybox;
+  groundedSkybox=new GroundedSkybox(texture,height,radius);
+  groundedSkybox.position.set(centerX,groundY+height,centerZ);
+  groundedSkybox.renderOrder=-1000;
+  groundedSkybox.material.depthWrite=false;
+  groundedSkybox.material.fog=false;
+  groundedSkybox.frustumCulled=false;
+  scene.add(groundedSkybox);
+}
 function disposeMaterialsOnly(root){root.traverse(o=>{if(o.isMesh){const ms=Array.isArray(o.material)?o.material:[o.material];ms.forEach(m=>{if(m?.userData?.viewerTemp)m.dispose();});}});}
 function viewMaterial(original){
   if(view==='realistic')return original;
@@ -251,7 +290,7 @@ async function initializeAssets(){
   if(P.assets.scanPreview){try{showStatus('Loading survey preview');const gltf=await loadGLB(P.assets.scanPreview,'Survey preview',10,30);replaceScan(gltf.scene);showStatus('Survey preview loaded');}catch(e){console.error(e);showStatus('Preview failed; demo visible');}}
   if(P.assets.construction){try{showStatus('Loading build animation');const gltf=await loadGLB(P.assets.construction,'Construction animation',30,65);initBuildAnimation(gltf);}catch(e){console.error(e);showStatus('Build failed; demo visible');}}
   if(P.assets.scanDetailed){try{showStatus('Loading full-detail survey');const gltf=await loadGLB(P.assets.scanDetailed,'Detailed survey',65,90);replaceScan(gltf.scene);showStatus('Detailed survey ready');}catch(e){console.error(e);showStatus('Detailed scan failed; preview visible');}}
-  if(P.assets.environmentHDR){try{showStatus('Loading sky lighting');const HDRLoader=P.assets.environmentHDR.toLowerCase().endsWith('.exr')?EXRLoader:RGBELoader;const tex=await new HDRLoader().loadAsync(P.assets.environmentHDR);tex.mapping=THREE.EquirectangularReflectionMapping;hdrTexture=tex;scene.environment=tex;scene.environmentIntensity=hdrLevel;scene.backgroundBlurriness=P.environment.backgroundBlur;scene.environmentRotation.y=THREE.MathUtils.degToRad(P.environment.rotationDegrees);scene.backgroundRotation.y=THREE.MathUtils.degToRad(P.environment.rotationDegrees);updateSky();showStatus('HDR lighting loaded · background toggle ready');}catch(e){console.error(e);showStatus('HDR unavailable; using studio lighting');}}
+  if(P.assets.environmentHDR){try{showStatus('Loading sky lighting');const HDRLoader=P.assets.environmentHDR.toLowerCase().endsWith('.exr')?EXRLoader:RGBELoader;const tex=await new HDRLoader().loadAsync(P.assets.environmentHDR);tex.mapping=THREE.EquirectangularReflectionMapping;hdrTexture=tex;scene.environment=tex;scene.environmentIntensity=hdrLevel;scene.backgroundBlurriness=P.environment.backgroundBlur;scene.environmentRotation.y=THREE.MathUtils.degToRad(P.environment.rotationDegrees);scene.backgroundRotation.y=THREE.MathUtils.degToRad(P.environment.rotationDegrees);makeGroundedBackground(tex);updateSky();showStatus('HDR lighting loaded · background toggle ready');}catch(e){console.error(e);showStatus('HDR unavailable; using studio lighting');}}
   if(!Object.values(P.assets).some(Boolean))showStatus('Interactive demo · Ready');
   stageProgress('Ready',100);
   // Controls and scene already usable even while fetching replacements.
@@ -261,6 +300,7 @@ async function initializeAssets(){
 function initLandscapeAnimation(gltf){
   if(landscapeModel){forgetMaterials(landscapeModel);landscapeRoot.remove(landscapeModel);}
   landscapeModel=gltf.scene;
+  makeLandscapeMatte(landscapeModel);
   place(landscapeModel,P.placement.landscape);
   landscapeRoot.add(landscapeModel);
   if(landscapeMixer){landscapeMixer.stopAllAction();landscapeMixer.uncacheRoot(landscapeMixer.getRoot());}

@@ -10,7 +10,7 @@ export const PROJECT = {
     scanPreview: null, // e.g. '/models/farm_scan_low.glb' (fast, low-detail)
     scanDetailed: null, // e.g. '/models/farm_scan_final.glb' (loads after preview)
     construction: `${import.meta.env.BASE_URL}models/barn_animation.glb`, // put your own GLB in public/models/
-    environmentHDR: `${import.meta.env.BASE_URL}environments/meadow_2_4k.exr`, // change to '/environments/sunny_fields_1k.hdr' once downloaded
+    environmentHDR: `${import.meta.env.BASE_URL}environments/196_hdrmaps_com_free_2K.exr`, // change to '/environments/sunny_fields_1k.hdr' once downloaded
   },
   environment: {
     showBackground: true, // UI toggle hides sky image, but NEVER disables HDR illumination
@@ -18,6 +18,16 @@ export const PROJECT = {
     intensity: 0.55,
     backgroundBlur: 0,
     rotationDegrees: 0,
+    // Visual-only projection of the HDR onto a distant ground plane.
+    // Calibrate groundY to Barnscape terrain height if needed.
+    groundedSkybox: {
+      enabled: true,
+      height: 15,
+      radius: 230,
+      groundY: -2.3,
+      centerX: 0,
+      centerZ: 0,
+    },
   },
   roof: { objectName: 'BarnRoof', fadeStartFrame: 178, fadeEndFrame: 190 }, // matches Blender object name (and children)
   stageJumpSeconds: 1.05, // clicking a stage animates to its end this quickly
