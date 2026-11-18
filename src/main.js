@@ -42,8 +42,10 @@ sun.position.set(-30,48,26);sun.castShadow=true;sun.shadow.mapSize.set(2048,2048
 sun.shadow.camera.left=-65;sun.shadow.camera.right=65;sun.shadow.camera.top=65;sun.shadow.camera.bottom=-65;
 sun.shadow.normalBias=.035;scene.add(sun);
 const grid=new THREE.GridHelper(100,50,'#ccd5ca','#adbcb3');grid.position.y=-.035;grid.visible=false;scene.add(grid);
-const baseScan=new THREE.Group(),buildRoot=new THREE.Group();scene.add(baseScan,buildRoot);
+const baseScan=new THREE.Group(),buildRoot=new THREE.Group(),landscapeRoot=new THREE.Group();
+scene.add(baseScan,buildRoot,landscapeRoot);
 let scanRoot=null, buildModel=null, demoBuild=null, mixer=null, animationActions=[];
+let landscapeModel=null, landscapeMixer=null, landscapeActions=[];
 let frame=0,playing=false,playRate=1,view='realistic',showLabels=true,selectedPoi=null;
 let stageJump=null;
 const poiNodes=[];
@@ -67,7 +69,7 @@ function viewMaterial(original){
   m.userData.viewerTemp=true;return m;
 }
 function applyView(){
-  for(const root of [baseScan,buildRoot])root.traverse(o=>{
+  for(const root of [baseScan,buildRoot,landscapeRoot])root.traverse(o=>{
     if(!o.isMesh || o.userData.isRoofExteriorLayer)return;
     if(!materialBackups.has(o))materialBackups.set(o,o.material);
     const original=materialBackups.get(o);
@@ -231,6 +233,7 @@ async function initializeAssets(){
   demoBuild=createDemoBarn();replaceBuild(demoBuild.root);updateBuild();
   setTimeout(()=>{if(!$('loadingCover').hidden)$('loadingCover').hidden=true;},200);
   // Optional assets stream sequentially; every stage keeps the preview interactive.
+  if(P.assets.landscape){try{showStatus('Loading Barnscape and trailer removal');const gltf=await loadGLB(P.assets.landscape,'Barnscape environment',8,30);initLandscapeAnimation(gltf);showStatus('Barnscape loaded');}catch(e){console.error('[Barn viewer] Could not load Barnscape:',e);showStatus('Barnscape unavailable; check filename/path');}}
   if(P.assets.scanPreview){try{showStatus('Loading survey preview');const gltf=await loadGLB(P.assets.scanPreview,'Survey preview',10,30);replaceScan(gltf.scene);showStatus('Survey preview loaded');}catch(e){console.error(e);showStatus('Preview failed; demo visible');}}
   if(P.assets.construction){try{showStatus('Loading build animation');const gltf=await loadGLB(P.assets.construction,'Construction animation',30,65);initBuildAnimation(gltf);}catch(e){console.error(e);showStatus('Build failed; demo visible');}}
   if(P.assets.scanDetailed){try{showStatus('Loading full-detail survey');const gltf=await loadGLB(P.assets.scanDetailed,'Detailed survey',65,90);replaceScan(gltf.scene);showStatus('Detailed survey ready');}catch(e){console.error(e);showStatus('Detailed scan failed; preview visible');}}
@@ -239,8 +242,50 @@ async function initializeAssets(){
   stageProgress('Ready',100);
   // Controls and scene already usable even while fetching replacements.
 }
+// Barnscape is an independent, persistent model. All its glTF actions are sampled
+// against global frames 0–50 and held at the final pose for the rest of the show.
+function initLandscapeAnimation(gltf){
+  if(landscapeModel){forgetMaterials(landscapeModel);landscapeRoot.remove(landscapeModel);}
+  landscapeModel=gltf.scene;
+  place(landscapeModel,P.placement.landscape);
+  landscapeRoot.add(landscapeModel);
+  if(landscapeMixer){landscapeMixer.stopAllAction();landscapeMixer.uncacheRoot(landscapeMixer.getRoot());}
+  landscapeMixer=null;
+  landscapeActions=[];
+  const clips=P.landscapeAnimation?.clipName
+    ? gltf.animations.filter(c=>c.name===P.landscapeAnimation.clipName)
+    : gltf.animations;
+  if(clips.length){
+    landscapeMixer=new THREE.AnimationMixer(landscapeModel);
+    for(const clip of clips){
+      const action=landscapeMixer.clipAction(clip);
+      action.setLoop(THREE.LoopOnce,1);
+      action.clampWhenFinished=true;
+      action.enabled=true;
+      action.play();
+      landscapeActions.push({clip,action});
+    }
+  }
+  applyView();
+  updateLandscape();
+  console.info(`[Barn viewer] Barnscape loaded: ${landscapeActions.length} animation clips; held at frame 50 after trailer removal.`);
+}
+function updateLandscape(){
+  if(!landscapeMixer || !landscapeActions.length)return;
+  const {startFrame=0,endFrame=50}=P.landscapeAnimation||{};
+  const seconds=THREE.MathUtils.clamp((frame-startFrame)/P.fps,0,(endFrame-startFrame)/P.fps);
+  for(const {clip,action} of landscapeActions){
+    action.enabled=true;
+    action.paused=false;
+    action.time=Math.min(seconds,clip.duration);
+    action.setEffectiveWeight(1);
+  }
+  landscapeMixer.update(0);
+}
 function updateBuild(){
-  if(demoBuild)demoBuild.setFrame(frame/P.frameCount*800);
+  if(demoBuild)demoBuild.setFrame(Math.max(0,frame-(P.constructionAnimation.startFrame||0))/671*800);
+  // Keep the proposed barn hidden while the trailer is being removed.
+  if(buildModel)buildModel.visible=frame >= (P.constructionAnimation.startFrame||0);
   if(mixer && animationActions.length){
     const {startFrame,endFrame}=P.constructionAnimation;
     // IMPORTANT: use absolute Blender timeline seconds, NOT a percentage of
@@ -258,24 +303,18 @@ function updateBuild(){
     mixer.update(0); // Evaluate the manually positioned actions without advancing time.
   }
 }
-function currentChapter(){return P.chapters.find(c=>frame<=c.end)||P.chapters[P.chapters.length-1];}
+function currentChapter(){return [...P.chapters].reverse().find(c=>frame>=c.start)||P.chapters[0];}
 function setFrame(n){
-  const previousFrame = frame;
+  const previousFrame=frame;
   frame=THREE.MathUtils.clamp(Math.round(n),0,P.frameCount);
-
-    // Reset automatic roof control when rewinding.
-  if (frame < 128 && previousFrame >= 128) {
-    roofManualOverride = null;
-  }
-
-  // Trigger cutaway when reaching Barn Decorated.
-  if (previousFrame < 128 && frame >= 128) {
-    if (roofManualOverride === false) {
-      roofManualOverride = null;
-    }
-  }
-
-
+  // Every replay should be able to perform the automatic roof reveal again.
+  const roofStart=P.roof.fadeStartFrame;
+  if(previousFrame>=roofStart && frame<roofStart)roofManualOverride=null;
+  // If the exterior was manually restored earlier, let the cutaway transition
+  // take over again as we pass the construction checkpoint.
+  if(previousFrame<roofStart && frame>=roofStart && roofManualOverride===false)
+    roofManualOverride=null;
+  updateLandscape();
   updateBuild();
   updateRoofCulling();
   $('timelineSlider').value=frame;
@@ -292,7 +331,6 @@ function setPlaying(p){
   if(p && frame>=P.frameCount){
     playing=false;
     playbackFrame=0;
-    
     setFrame(0);
   }
   playing=p;
