@@ -57,7 +57,7 @@ let navMove=null;const viewport=$('viewport');
 let prevTick=performance.now();
 let materialBackups=new Map();
 const shadowBase={hemisphere:2.15,sun:3.0};
-let hdrLevel=1,shadowLevel=.65;
+let hdrLevel=P.environment.intensity ?? .55,shadowLevel=.65;
 function applyLighting(){
   scene.environmentIntensity=hdrLevel;
   sun.shadow.intensity=shadowLevel;
@@ -68,6 +68,7 @@ function applyLighting(){
 }
 $('hdrBrightness').addEventListener('input',e=>{hdrLevel=Number(e.target.value)/100;applyLighting();});
 $('shadowStrength').addEventListener('input',e=>{shadowLevel=Number(e.target.value)/100;applyLighting();});
+$('hdrBrightness').value=String(Math.round(hdrLevel*100));
 applyLighting();
 function showStatus(t){$('loadingStatus').textContent=t;}
 function place(root,spec){root.position.fromArray(spec.position);root.rotation.set(...spec.rotation);root.scale.setScalar(spec.scale);root.traverse(o=>{if(o.isMesh){o.castShadow=true;o.receiveShadow=true;}});}
@@ -494,12 +495,39 @@ function boundaryArea(points){
   }
   return area;
 }
+// Context menu for finished boundary labels; available without drawing mode.
+const boundaryMenu=document.createElement('div');
+boundaryMenu.className='boundary-context-menu';
+boundaryMenu.hidden=true;
+boundaryMenu.innerHTML='<button type="button" class="boundary-delete">Delete boundary?</button><button type="button" class="boundary-dismiss">Cancel</button>';
+viewport.appendChild(boundaryMenu);
+let boundaryMenuTarget=null;
+function hideBoundaryMenu(){boundaryMenu.hidden=true;boundaryMenuTarget=null;}
+function showBoundaryMenu(e,b){
+  if(!b.closed)return;
+  e.preventDefault();e.stopPropagation();boundaryMenuTarget=b;
+  const rect=viewport.getBoundingClientRect();
+  boundaryMenu.hidden=false;
+  const w=boundaryMenu.offsetWidth||155,h=boundaryMenu.offsetHeight||80;
+  boundaryMenu.style.left=Math.max(6,Math.min(e.clientX-rect.left,rect.width-w-6))+'px';
+  boundaryMenu.style.top=Math.max(6,Math.min(e.clientY-rect.top,rect.height-h-6))+'px';
+}
+boundaryMenu.querySelector('.boundary-delete').addEventListener('click',()=>{
+  if(boundaryMenuTarget)removeBoundary(boundaryMenuTarget);
+  hideBoundaryMenu();
+});
+boundaryMenu.querySelector('.boundary-dismiss').addEventListener('click',hideBoundaryMenu);
+document.addEventListener('pointerdown',e=>{
+  if(!boundaryMenu.hidden && !boundaryMenu.contains(e.target))hideBoundaryMenu();
+},true);
 function updateBoundaryLabel(b,coords){
   if(!b.closed || coords.length<3)return;
   if(!b.label){
     b.label=document.createElement('div');
     b.label.className='boundary-stat-label';
     b.label.setAttribute('role','status');
+    b.label.title='Right-click for boundary options';
+    b.label.addEventListener('contextmenu',e=>showBoundaryMenu(e,b));
     $('boundaryLabels').appendChild(b.label);
   }
   const center=boundaryCentroid(coords),gps=boundaryGPS(center);
@@ -555,7 +583,7 @@ function addBoundaryPoint(b,hit){
   handle.userData.boundary=b;handle.userData.anchorIndex=b.points.length-1;handle.renderOrder=710;
   handle.position.copy(hit.world);boundaryRoot.add(handle);b.handles.push(handle);rebuildBoundary(b);showBoundaryCoords(anchor);
 }
-function removeBoundary(b){for(const handle of b.handles){boundaryRoot.remove(handle);handle.geometry.dispose();handle.material.dispose();}for(const line of b.lines){boundaryRoot.remove(line);line.geometry.dispose();line.material.dispose();}const i=boundaries.indexOf(b);if(i>=0)boundaries.splice(i,1);if(b.label)b.label.remove();if(activeBoundary===b)activeBoundary=null;}
+function removeBoundary(b){if(boundaryMenuTarget===b)hideBoundaryMenu();for(const handle of b.handles){boundaryRoot.remove(handle);handle.geometry.dispose();handle.material.dispose();}for(const line of b.lines){boundaryRoot.remove(line);line.geometry.dispose();line.material.dispose();}const i=boundaries.indexOf(b);if(i>=0)boundaries.splice(i,1);if(b.label)b.label.remove();if(activeBoundary===b)activeBoundary=null;}
 function cancelBoundary(){if(activeBoundary){removeBoundary(activeBoundary);activeBoundary=null;}showBoundaryCoords(null);setBoundaryTool(false);}
 function setBoundaryTool(on){boundaryTool=on;controls.enabled=!on;$('boundaryBtn').classList.toggle('active',on);$('boundaryBtn').setAttribute('aria-pressed',String(on));$('boundaryHud').hidden=!on;renderer.domElement.style.cursor=on?'crosshair':'';if(!on && activeBoundary){removeBoundary(activeBoundary);activeBoundary=null;}for(const b of boundaries)b.handles.forEach(h=>h.visible=on);}
 $('boundaryBtn').addEventListener('click',()=>setBoundaryTool(!boundaryTool));
@@ -605,9 +633,18 @@ function getMarkerWorldPosition(p){
   }
   return new THREE.Vector3(...(p.position||[0,0,0]));
 }
+function relevantPOIIds(){
+  // Latest three unlocked construction annotations, updated on forward/backward scrubbing.
+  // The current stage is most relevant; older stages fade as a new stage unlocks.
+  const eligible=P.pointsOfInterest.filter(p=>frame>=p.fromFrame);
+  eligible.sort((a,b)=>b.fromFrame-a.fromFrame);
+  return new Set(eligible.slice(0,3).map(p=>p.id));
+}
 function updateStagePOI(){
+  const relevant=relevantPOIIds();
   for(const {data,node} of poiNodes){
     node.classList.toggle('poi-unlocked',frame>=data.fromFrame);
+    node.classList.toggle('poi-relevant',relevant.has(data.id));
   }
 }
 for(const [i,p] of P.pointsOfInterest.entries()){
@@ -623,17 +660,21 @@ for(const [i,p] of P.pointsOfInterest.entries()){
 function renderPOI(){
   const w=viewport.clientWidth,h=viewport.clientHeight;
   const occupied=[];
-  for(const {data,node} of poiNodes){
-    if(!showLabels||frame<data.fromFrame){node.style.display='none';continue;}
+  const relevant=relevantPOIIds();
+  // Prioritize new stages so their labels take the clearest non-overlapping positions.
+  const sorted=[...poiNodes].sort((a,b)=>b.data.fromFrame-a.data.fromFrame);
+  for(const {data,node} of sorted){
     const pos=getMarkerWorldPosition(data);
     pos.project(camera);
-    const visible=pos.z>-1&&pos.z<1&&Math.abs(pos.x)<.96&&Math.abs(pos.y)<.92;
-    node.style.display=visible?'flex':'none';
+    const inView=pos.z>-1&&pos.z<1&&Math.abs(pos.x)<.96&&Math.abs(pos.y)<.92;
+    const visible=showLabels && relevant.has(data.id) && inView;
+    node.classList.toggle('poi-visible',visible);
+    node.setAttribute('aria-hidden',String(!visible));
+    node.tabIndex=visible?0:-1;
     if(!visible)continue;
     const x=(pos.x*.5+.5)*w,y=(-pos.y*.5+.5)*h;
-    // Spread labels that overlap on the screen; the 3D anchor stays fixed.
     let offsetX=0,offsetY=0;
-    const shifts=[[0,0],[-155,-66],[155,-66],[-155,66],[155,66],[0,-110],[0,110],[-240,0],[240,0],[-240,-100],[240,100],[0,-160]];
+    const shifts=[[0,0],[-155,-66],[155,-66],[-155,66],[155,66],[0,-110],[0,110],[-240,0],[240,0]];
     for(const [dx,dy] of shifts){
       const candidate={x:x+dx,y:y+dy};
       if(occupied.every(v=>Math.abs(v.x-candidate.x)>148||Math.abs(v.y-candidate.y)>44)){
@@ -707,6 +748,7 @@ $('helpBtn').addEventListener('click',()=>showHelp(true));$('closeHelp').addEven
 $('helpModal').addEventListener('click',e=>{if(e.target===$('helpModal'))showHelp(false);});
 window.addEventListener('keydown',e=>{
   if(e.target.matches('input,select,textarea,button')&&e.key!=='Escape')return;
+  if(e.key==='Escape' && !boundaryMenu.hidden){hideBoundaryMenu();return;}
   if(e.key==='Escape' && boundaryTool){cancelBoundary();return;}
   if(e.key==='Escape'){if(!$('helpModal').hidden)showHelp(false);else dismissPanel();return;}
   if(e.key==='?'){showHelp(true);return;}
