@@ -37,3 +37,50 @@
   .top-left-hud{max-width:60%;padding:11px 13px}
   .chapter-nav{padding:7px}
 }
+
+/* V7 compact controls */
+.topbar{height:52px;min-height:52px;padding:0 16px;gap:10px}
+.compact-title{font-size:15px;font-weight:750;letter-spacing:.01em;color:#e9f7f1;margin:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;flex:1}
+.top-actions{gap:6px;flex:none}
+.render-sliders{display:flex;gap:14px;align-items:center;padding:0 8px}
+.render-slider{display:flex;align-items:center;gap:7px;color:#d3e7e2;font-size:11px;white-space:nowrap}
+.render-slider input{width:92px;accent-color:#9cf2cb;height:20px;cursor:pointer}
+.render-slider output{font-size:10px;color:#b4ddce;min-width:32px;text-align:right}
+.timeline{min-height:0;padding:9px 16px 8px}
+.timeline-row{margin-top:0;gap:9px}
+.timeline-row #speedSelect{height:32px;border-radius:7px;background:#253f45;border:1px solid #496268;color:#e7f7f1;padding:0 8px;font-size:11px}
+.chapter-nav{margin-top:7px;padding:5px;gap:5px;border-radius:8px}
+.chapter-pill{min-height:35px;padding:5px 10px;font-size:10px}
+.chapter-pill small{font-size:8px;margin-top:2px}
+.chapter-pill span{font-size:9px}
+.play-btn{width:34px;height:34px}
+.small-btn{width:31px;height:31px}
+.scrub-wrap{min-height:28px;height:30px}
+.top-left-hud{top:15px;left:16px;padding:10px 12px}
+.top-left-hud strong{font-size:17px}
+.top-left-hud .hud-sub{display:none}
+.toolbar{top:96px;left:16px}
+.boundary-hud{position:absolute;z-index:7;right:18px;bottom:12px;width:min(360px,calc(100% - 40px));background:#10272fe8;color:#edfff8;border:1px solid #4b8c7c;border-radius:11px;padding:12px 14px;display:flex;flex-direction:column;gap:6px;box-shadow:0 9px 25px #0005}
+.boundary-hud[hidden]{display:none}
+.boundary-hud strong{font-size:12px}
+.boundary-hud span{font-size:11px}
+.boundary-hud .boundary-instructions{color:#aacbc4;line-height:1.5}
+#clearBoundariesBtn{width:max-content;background:#244b45;color:#bff9d8;border:1px solid #4b9180;border-radius:6px;padding:6px 9px;cursor:pointer}
+@media(max-width:760px){.topbar{height:48px;min-height:48px;padding:0 7px}.compact-title{font-size:11px;max-width:34vw}.render-sliders{gap:3px;padding:0}.render-slider{gap:2px;font-size:9px}.render-slider input{width:42px}.render-slider output{display:none}.top-actions{gap:3px}.icon-btn{width:27px;height:28px}.timeline{padding:6px}.timeline-row{gap:5px}.timeline-row #speedSelect{width:49px;padding:0 2px;font-size:10px}.chapter-nav{margin-top:5px}.chapter-pill{min-height:32px;padding:4px 7px}.toolbar{top:71px}.top-left-hud{max-width:54%;padding:8px}.boundary-hud{bottom:5px;right:5px;width:min(270px,calc(100% - 10px));padding:8px}}
+
+/* V7 admin camera readout: opened from the button beside fullscreen. */
+#adminBtn.active{background:#29584f;color:#aaf9d6;border-color:#6ab69d}
+.admin-readout{position:absolute;z-index:9;right:16px;top:12px;width:min(300px,calc(100% - 30px));
+  padding:13px;background:rgba(12,30,36,.94);border:1px solid #51877d;border-radius:12px;
+  box-shadow:0 12px 30px #081c2399;color:#e7f7f2;backdrop-filter:blur(12px)}
+.admin-readout[hidden]{display:none}
+.admin-heading{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:10px}
+.admin-heading strong{font-size:11px;letter-spacing:.12em;color:#b3f1d5}
+.admin-heading span{font-size:10px;color:#a1bfbb}
+.admin-readout dl{margin:0;display:grid;gap:7px}
+.admin-readout dl>div{display:flex;justify-content:space-between;align-items:baseline;gap:10px;border-bottom:1px solid #ffffff14;padding-bottom:5px}
+.admin-readout dt{color:#a5c2be;font-size:10px;white-space:nowrap}
+.admin-readout dd{font:600 10px ui-monospace,SFMono-Regular,monospace;margin:0;text-align:right;white-space:nowrap;color:#f4fff9}
+.admin-copy{margin-top:11px;border:1px solid #64a18d;background:#235448;color:#c6ffe0;border-radius:6px;padding:7px 10px;font-size:11px;width:100%}
+#viewport.admin-visible .gizmo{top:235px}
+@media(max-width:760px){.admin-readout{right:5px;top:7px;width:min(278px,calc(100% - 10px));padding:9px}.admin-readout dt,.admin-readout dd{font-size:9px}#viewport.admin-visible .gizmo{top:220px}}

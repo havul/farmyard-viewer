@@ -5,13 +5,16 @@ import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 import { KTX2Loader } from 'three/addons/loaders/KTX2Loader.js';
 import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
 import { EXRLoader } from 'three/addons/loaders/EXRLoader.js';
+import { Line2 } from 'three/addons/lines/Line2.js';
+import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
+import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 import { PROJECT as P } from './config.js';
 import { createDemoSite, createDemoBarn } from './demo.js';
 import './style.css';
 
 const $ = id => document.getElementById(id);
-$('projectTitle').textContent=P.title;$('projectSubtitle').textContent=P.subtitle;
+$('projectTitle').textContent='Barn Construction - Interactive Timeline';
 $('timelineSlider').max=P.frameCount;
 const scene=new THREE.Scene();
 const solidBackground=new THREE.Color(P.environment.backgroundColor);
@@ -29,7 +32,7 @@ updateSky();
 const camera=new THREE.PerspectiveCamera(42,1,.1,300);
 camera.position.fromArray(P.camera.position);
 const renderer=new THREE.WebGLRenderer({canvas:$('sceneCanvas'),antialias:true,alpha:false,preserveDrawingBuffer:true,powerPreference:'high-performance'});
-renderer.setPixelRatio(Math.min(devicePixelRatio,2));renderer.outputColorSpace=THREE.SRGBColorSpace;
+renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,window.innerWidth<=768?1.25:2));renderer.outputColorSpace=THREE.SRGBColorSpace;
 renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=1.2;
 renderer.shadowMap.enabled=true;renderer.shadowMap.type=THREE.PCFSoftShadowMap;
 const controls=new OrbitControls(camera,renderer.domElement);
@@ -38,7 +41,7 @@ controls.minDistance=P.camera.minDistance;controls.maxDistance=P.camera.maxDista
 controls.target.fromArray(P.camera.target);controls.update();
 scene.add(new THREE.HemisphereLight('#eef5ff','#64735e',2.15));
 const sun=new THREE.DirectionalLight('#fff0d4',3.0);
-sun.position.set(-30,48,26);sun.castShadow=true;sun.shadow.mapSize.set(2048,2048);
+sun.position.set(-30,48,26);sun.castShadow=true;sun.shadow.mapSize.set(window.innerWidth<=768?1024:2048,window.innerWidth<=768?1024:2048);
 sun.shadow.camera.left=-65;sun.shadow.camera.right=65;sun.shadow.camera.top=65;sun.shadow.camera.bottom=-65;
 sun.shadow.normalBias=.035;scene.add(sun);
 const grid=new THREE.GridHelper(100,50,'#ccd5ca','#adbcb3');grid.position.y=-.035;grid.visible=false;scene.add(grid);
@@ -56,8 +59,22 @@ const barnBoundsSize=new THREE.Vector3();
 let navMove=null;const viewport=$('viewport');
 let prevTick=performance.now();
 let materialBackups=new Map();
+const wireOverlays=new Map();
+const shadowBase={hemisphere:2.15,sun:3.0};
+let hdrLevel=1,shadowLevel=.65;
+function applyLighting(){
+  scene.environmentIntensity=hdrLevel;
+  sun.shadow.intensity=shadowLevel;
+  sun.castShadow=shadowLevel>0.005;
+  renderer.shadowMap.enabled=shadowLevel>0.005;
+  $('hdrBrightnessValue').textContent=Math.round(hdrLevel*100)+'%';
+  $('shadowStrengthValue').textContent=Math.round(shadowLevel*100)+'%';
+}
+$('hdrBrightness').addEventListener('input',e=>{hdrLevel=Number(e.target.value)/100;applyLighting();});
+$('shadowStrength').addEventListener('input',e=>{shadowLevel=Number(e.target.value)/100;applyLighting();});
+applyLighting();
 function showStatus(t){$('loadingStatus').textContent=t;}
-function place(root,spec){root.position.fromArray(spec.position);root.rotation.set(...spec.rotation);root.scale.setScalar(spec.scale);}
+function place(root,spec){root.position.fromArray(spec.position);root.rotation.set(...spec.rotation);root.scale.setScalar(spec.scale);root.traverse(o=>{if(o.isMesh){o.castShadow=true;o.receiveShadow=true;}});}
 function disposeMaterialsOnly(root){root.traverse(o=>{if(o.isMesh){const ms=Array.isArray(o.material)?o.material:[o.material];ms.forEach(m=>{if(m?.userData?.viewerTemp)m.dispose();});}});}
 function viewMaterial(original){
   if(view==='realistic')return original;
@@ -65,10 +82,32 @@ function viewMaterial(original){
   if(!original)return original;
   const c=original.color?.clone() || new THREE.Color('#9aaeb4');
   const m=view==='unlit'?new THREE.MeshBasicMaterial({color:c,side:original.side, map:original.map||null}):
-    new THREE.MeshBasicMaterial({color:'#6c8793',wireframe:true,transparent:true,opacity:.85});
+    new THREE.MeshBasicMaterial({color:'#ffffff',wireframe:true,side:original.side});
   m.userData.viewerTemp=true;return m;
 }
+function removeWireOverlays(){
+  for(const [mesh,line] of wireOverlays){
+    mesh.remove(line);
+    line.geometry.dispose();line.material.dispose();
+  }
+  wireOverlays.clear();
+}
+function addThickWire(mesh){
+  if(!mesh.geometry?.attributes?.position || wireOverlays.has(mesh))return;
+  // Skip extreme photogrammetry meshes to avoid duplicating huge vertex buffers.
+  if(mesh.geometry.attributes.position.count>250000)return;
+  const edges=new THREE.EdgesGeometry(mesh.geometry,18);
+  if(!edges.attributes.position?.count){edges.dispose();return;}
+  const coords=Array.from(edges.attributes.position.array);
+  edges.dispose();
+  const geometry=new LineGeometry();geometry.setPositions(coords);
+  const material=new LineMaterial({color:0xffffff,linewidth:2.5,worldUnits:false,transparent:false,depthTest:true});
+  material.resolution.set(Math.max(1,viewport.clientWidth),Math.max(1,viewport.clientHeight));
+  const line=new Line2(geometry,material);line.name='Viewer_Thick_Wire';line.frustumCulled=false;
+  mesh.add(line);wireOverlays.set(mesh,line);
+}
 function applyView(){
+  removeWireOverlays();
   for(const root of [baseScan,buildRoot,landscapeRoot])root.traverse(o=>{
     if(!o.isMesh || o.userData.isRoofExteriorLayer)return;
     if(!materialBackups.has(o))materialBackups.set(o,o.material);
@@ -76,6 +115,7 @@ function applyView(){
     const old=o.material;
     o.material=viewMaterial(original);
     if(old!==original){const arr=Array.isArray(old)?old:[old];arr.forEach(m=>{if(m?.userData?.viewerTemp)m.dispose();});}
+    if(view==='wireframe')addThickWire(o);
   });
   // Keep roof interior face orientation when changing display mode.
   for(const mesh of roofMeshes){
@@ -237,7 +277,7 @@ async function initializeAssets(){
   if(P.assets.scanPreview){try{showStatus('Loading survey preview');const gltf=await loadGLB(P.assets.scanPreview,'Survey preview',10,30);replaceScan(gltf.scene);showStatus('Survey preview loaded');}catch(e){console.error(e);showStatus('Preview failed; demo visible');}}
   if(P.assets.construction){try{showStatus('Loading build animation');const gltf=await loadGLB(P.assets.construction,'Construction animation',30,65);initBuildAnimation(gltf);}catch(e){console.error(e);showStatus('Build failed; demo visible');}}
   if(P.assets.scanDetailed){try{showStatus('Loading full-detail survey');const gltf=await loadGLB(P.assets.scanDetailed,'Detailed survey',65,90);replaceScan(gltf.scene);showStatus('Detailed survey ready');}catch(e){console.error(e);showStatus('Detailed scan failed; preview visible');}}
-  if(P.assets.environmentHDR){try{showStatus('Loading sky lighting');const HDRLoader=P.assets.environmentHDR.toLowerCase().endsWith('.exr')?EXRLoader:RGBELoader;const tex=await new HDRLoader().loadAsync(P.assets.environmentHDR);tex.mapping=THREE.EquirectangularReflectionMapping;hdrTexture=tex;scene.environment=tex;scene.environmentIntensity=P.environment.intensity;scene.backgroundBlurriness=P.environment.backgroundBlur;scene.environmentRotation.y=THREE.MathUtils.degToRad(P.environment.rotationDegrees);scene.backgroundRotation.y=THREE.MathUtils.degToRad(P.environment.rotationDegrees);updateSky();showStatus('HDR lighting loaded · background toggle ready');}catch(e){console.error(e);showStatus('HDR unavailable; using studio lighting');}}
+  if(P.assets.environmentHDR){try{showStatus('Loading sky lighting');const HDRLoader=P.assets.environmentHDR.toLowerCase().endsWith('.exr')?EXRLoader:RGBELoader;const tex=await new HDRLoader().loadAsync(P.assets.environmentHDR);tex.mapping=THREE.EquirectangularReflectionMapping;hdrTexture=tex;scene.environment=tex;scene.environmentIntensity=hdrLevel;scene.backgroundBlurriness=P.environment.backgroundBlur;scene.environmentRotation.y=THREE.MathUtils.degToRad(P.environment.rotationDegrees);scene.backgroundRotation.y=THREE.MathUtils.degToRad(P.environment.rotationDegrees);updateSky();showStatus('HDR lighting loaded · background toggle ready');}catch(e){console.error(e);showStatus('HDR unavailable; using studio lighting');}}
   if(!Object.values(P.assets).some(Boolean))showStatus('Interactive demo · Ready');
   stageProgress('Ready',100);
   // Controls and scene already usable even while fetching replacements.
@@ -316,6 +356,7 @@ function setFrame(n){
     roofManualOverride=null;
   updateLandscape();
   updateBuild();
+  if(boundaries.length)updateBoundaries();
   updateRoofCulling();
   $('timelineSlider').value=frame;
   $('timelineSlider').style.setProperty('--pct',`${frame/P.frameCount*100}%`);
@@ -357,7 +398,7 @@ function renderTimeline(){
     btn.type='button';$('chapterNav').appendChild(btn);
   }
 }
-renderTimeline();setFrame(0);
+// Initialize the timeline only after all surface-boundary and POI state exists.
 // Delegate one click handler to the chapter bar. This works on desktop and touch,
 // including clicks on the chapter name/frame-range child elements.
 $('chapterNav').addEventListener('click',event=>{
@@ -416,6 +457,92 @@ document.querySelectorAll('[data-orient]').forEach(b=>b.addEventListener('click'
   const dir=new THREE.Vector3(...dirs[b.dataset.orient]).normalize().multiplyScalar(d);
   moveCamera(dir.add(controls.target).toArray(),target);
 }));
+// Surface-anchored polygon boundaries. Points store mesh-local coordinates so
+// they continue to follow animated objects as their world transforms change.
+const boundaryRoot=new THREE.Group();scene.add(boundaryRoot);
+const boundaryRaycaster=new THREE.Raycaster();
+const pointerNDC=new THREE.Vector2();
+const boundaries=[];
+let activeBoundary=null, boundaryTool=false, draggingPoint=null, pointerStart=null;
+const BOUNDARY_COLOR=0x67ffdc;
+function anchorWorld(a){return a.mesh.localToWorld(a.local.clone());}
+function surfaceHit(clientX,clientY){
+  const r=renderer.domElement.getBoundingClientRect();
+  pointerNDC.set((clientX-r.left)/r.width*2-1,-(clientY-r.top)/r.height*2+1);
+  boundaryRaycaster.setFromCamera(pointerNDC,camera);
+  const meshes=[];
+  for(const root of [landscapeRoot,baseScan,buildRoot])root.traverse(o=>{
+    if(o.isMesh && o.visible && !o.userData.isRoofExteriorLayer && o.parent?.visible!==false)meshes.push(o);
+  });
+  const hits=boundaryRaycaster.intersectObjects(meshes,false);
+  const hit=hits.find(h=>h.object.visible && h.object.parent?.visible!==false);
+  if(!hit)return null;
+  return {mesh:hit.object,local:hit.object.worldToLocal(hit.point.clone()),world:hit.point.clone()};
+}
+function formatPoint(v){return `${v.x.toFixed(2)}, ${v.y.toFixed(2)}, ${v.z.toFixed(2)} m`;}
+function showBoundaryCoords(anchor){$('boundaryCoords').textContent=anchor?'Last point (world XYZ): '+formatPoint(anchorWorld(anchor)):'Click a surface to add a point';}
+function rebuildBoundary(b){
+  // Clear previously generated tubes; a wider outer glow gives the line a luminous look.
+  for(const line of b.lines){boundaryRoot.remove(line);line.geometry.dispose();line.material.dispose();}
+  b.lines=[];
+  const coords=b.points.map(anchorWorld);
+  b.handles.forEach((handle,i)=>{handle.position.copy(coords[i]);handle.visible=boundaryTool;});
+  if(coords.length<2)return;
+  const path=coords.map(v=>v.clone().add(new THREE.Vector3(0,.012,0)));
+  if(b.closed)path.push(path[0].clone());
+  const curve=new THREE.CatmullRomCurve3(path,b.closed,'centripetal',.01);
+  // Straight polygon edges; not splines: connect each pair individually.
+  for(let i=0;i<path.length-1;i++){
+    const a=path[i],z=path[i+1];if(a.distanceToSquared(z)<1e-10)continue;
+    const segment=new THREE.LineCurve3(a,z);
+    for(const [radius,color,opacity] of [[.043,0x28e9bc,.22],[.012,BOUNDARY_COLOR,1]]){
+      const geometry=new THREE.TubeGeometry(segment,1,radius,5,false);
+      const material=new THREE.MeshBasicMaterial({color,transparent:opacity<1,opacity,depthTest:false,depthWrite:false});
+      const mesh=new THREE.Mesh(geometry,material);mesh.renderOrder=700;b.lines.push(mesh);boundaryRoot.add(mesh);
+    }
+  }
+}
+function addBoundaryPoint(b,hit){
+  const anchor={mesh:hit.mesh,local:hit.local.clone()};b.points.push(anchor);
+  const handle=new THREE.Mesh(new THREE.SphereGeometry(.16,12,8),new THREE.MeshBasicMaterial({color:BOUNDARY_COLOR,depthTest:false}));
+  handle.userData.boundary=b;handle.userData.anchorIndex=b.points.length-1;handle.renderOrder=710;
+  handle.position.copy(hit.world);boundaryRoot.add(handle);b.handles.push(handle);rebuildBoundary(b);showBoundaryCoords(anchor);
+}
+function removeBoundary(b){for(const handle of b.handles){boundaryRoot.remove(handle);handle.geometry.dispose();handle.material.dispose();}for(const line of b.lines){boundaryRoot.remove(line);line.geometry.dispose();line.material.dispose();}const i=boundaries.indexOf(b);if(i>=0)boundaries.splice(i,1);if(activeBoundary===b)activeBoundary=null;}
+function cancelBoundary(){if(activeBoundary){removeBoundary(activeBoundary);activeBoundary=null;}$('boundaryModeText').textContent='Boundary drawing';}
+function setBoundaryTool(on){boundaryTool=on;controls.enabled=!on;$('boundaryBtn').classList.toggle('active',on);$('boundaryBtn').setAttribute('aria-pressed',String(on));$('boundaryHud').hidden=!on;renderer.domElement.style.cursor=on?'crosshair':'';if(!on)cancelBoundary();for(const b of boundaries)b.handles.forEach(h=>h.visible=on);}
+$('boundaryBtn').addEventListener('click',()=>setBoundaryTool(!boundaryTool));
+$('clearBoundariesBtn').addEventListener('click',()=>{for(const b of [...boundaries])removeBoundary(b);showBoundaryCoords(null);});
+function pickHandle(clientX,clientY){
+  const r=renderer.domElement.getBoundingClientRect();pointerNDC.set((clientX-r.left)/r.width*2-1,-(clientY-r.top)/r.height*2+1);
+  boundaryRaycaster.setFromCamera(pointerNDC,camera);
+  const handles=boundaries.flatMap(b=>b.handles).filter(h=>h.visible);
+  const hit=boundaryRaycaster.intersectObjects(handles,false)[0];return hit?.object||null;
+}
+const canvas=renderer.domElement;
+canvas.addEventListener('contextmenu',e=>{if(!boundaryTool)return;e.preventDefault();if(activeBoundary){cancelBoundary();return;}const handle=pickHandle(e.clientX,e.clientY);if(handle)removeBoundary(handle.userData.boundary);});
+canvas.addEventListener('pointerdown',e=>{
+  if(!boundaryTool || e.button!==0)return;
+  e.preventDefault();e.stopPropagation();
+  pointerStart={x:e.clientX,y:e.clientY};
+  const handle=pickHandle(e.clientX,e.clientY);
+  if(handle && activeBoundary && handle.userData.boundary===activeBoundary && handle.userData.anchorIndex===0 && activeBoundary.points.length>=3){
+    activeBoundary.closed=true;rebuildBoundary(activeBoundary);activeBoundary=null;$('boundaryModeText').textContent='Boundary completed · click to draw another';return;
+  }
+  if(handle && !activeBoundary){draggingPoint=handle;canvas.setPointerCapture(e.pointerId);return;}
+  const hit=surfaceHit(e.clientX,e.clientY);if(!hit)return;
+  if(!activeBoundary){activeBoundary={points:[],handles:[],lines:[],closed:false};boundaries.push(activeBoundary);$('boundaryModeText').textContent='Creating boundary';}
+  addBoundaryPoint(activeBoundary,hit);
+});
+canvas.addEventListener('pointermove',e=>{
+  if(!draggingPoint)return;
+  const hit=surfaceHit(e.clientX,e.clientY);if(!hit)return;
+  const b=draggingPoint.userData.boundary;
+  b.points[draggingPoint.userData.anchorIndex]={mesh:hit.mesh,local:hit.local.clone()};
+  rebuildBoundary(b);showBoundaryCoords(b.points[draggingPoint.userData.anchorIndex]);
+});
+for(const n of ['pointerup','pointercancel'])canvas.addEventListener(n,()=>{draggingPoint=null;pointerStart=null;});
+function updateBoundaries(){for(const b of boundaries)rebuildBoundary(b);}
 controls.addEventListener('start',()=>navMove=null);
 function dismissPanel(){selectedPoi=null;$('infoPanel').hidden=true;document.querySelectorAll('.poi').forEach(b=>b.classList.remove('selected'));}
 $('closePanel').addEventListener('click',dismissPanel);
@@ -459,7 +586,7 @@ function renderPOI(){
     const x=(pos.x*.5+.5)*w,y=(-pos.y*.5+.5)*h;
     // Spread labels that overlap on the screen; the 3D anchor stays fixed.
     let offsetX=0,offsetY=0;
-    const shifts=[[0,0],[0,-54],[0,54],[-155,-28],[155,28],[-155,34],[155,-34],[-80,-100],[80,100]];
+    const shifts=[[0,0],[-155,-66],[155,-66],[-155,66],[155,66],[0,-110],[0,110],[-240,0],[240,0],[-240,-100],[240,100],[0,-160]];
     for(const [dx,dy] of shifts){
       const candidate={x:x+dx,y:y+dy};
       if(occupied.every(v=>Math.abs(v.x-candidate.x)>148||Math.abs(v.y-candidate.y)>44)){
@@ -470,7 +597,39 @@ function renderPOI(){
     node.style.transform=`translate(-50%,-50%) translate(${x+offsetX}px,${y+offsetY}px)`;
   }
 }
-function onResize(){const w=viewport.clientWidth,h=viewport.clientHeight;camera.aspect=w/Math.max(1,h);camera.updateProjectionMatrix();renderer.setSize(w,h,false);}
+let showAdminReadout=false;
+const adminPosition=$('adminPosition'),adminRotation=$('adminRotation'),adminAngles=$('adminAngles');
+const adminTarget=$('adminTarget'),adminDistance=$('adminDistance');
+const fmtVec=(v,places=2)=>[v.x,v.y,v.z].map(n=>n.toFixed(places)).join(' / ');
+function updateAdminReadout(){
+  if(!showAdminReadout)return;
+  adminPosition.textContent=fmtVec(camera.position);
+  const r=camera.rotation;
+  adminRotation.textContent=[r.x,r.y,r.z].map(a=>(THREE.MathUtils.radToDeg(a)).toFixed(1)+'°').join(' / ');
+  adminAngles.textContent=THREE.MathUtils.radToDeg(controls.getAzimuthalAngle()).toFixed(1)+'° / '+
+    (90-THREE.MathUtils.radToDeg(controls.getPolarAngle())).toFixed(1)+'°';
+  adminTarget.textContent=fmtVec(controls.target);
+  adminDistance.textContent=camera.position.distanceTo(controls.target).toFixed(2)+' m';
+}
+$('adminBtn').addEventListener('click',()=>{
+  showAdminReadout=!showAdminReadout;
+  $('adminReadout').hidden=!showAdminReadout;
+  viewport.classList.toggle('admin-visible',showAdminReadout);
+  $('adminBtn').classList.toggle('active',showAdminReadout);
+  $('adminBtn').setAttribute('aria-pressed',String(showAdminReadout));
+  $('adminBtn').setAttribute('aria-label',showAdminReadout?'Hide admin camera readout':'Show admin camera readout');
+  updateAdminReadout();
+});
+$('copyCameraBtn').addEventListener('click',()=>{
+  const pos=fmtVec(camera.position,4),target=fmtVec(controls.target,4);
+  const angles=adminAngles.textContent;
+  const message=`Camera position (X/Y/Z): ${pos}\nOrbit target (X/Y/Z): ${target}\nAzimuth / elevation: ${angles}`;
+  if(navigator.clipboard?.writeText)navigator.clipboard.writeText(message).then(()=>{
+    $('copyCameraBtn').textContent='Copied!';setTimeout(()=>$('copyCameraBtn').textContent='Copy camera coordinates',1200);
+  }).catch(()=>window.prompt('Copy camera coordinates:',message));
+  else window.prompt('Copy camera coordinates:',message);
+});
+function onResize(){const w=viewport.clientWidth,h=viewport.clientHeight;camera.aspect=w/Math.max(1,h);camera.updateProjectionMatrix();renderer.setSize(w,h,false);for(const line of wireOverlays.values())line.material.resolution.set(w,h);}
 new ResizeObserver(onResize).observe(viewport);onResize();
 function animate(now){requestAnimationFrame(animate);const dt=Math.min((now-prevTick)/1000,.05);prevTick=now;
   if(stageJump){
@@ -491,7 +650,7 @@ function animate(now){requestAnimationFrame(animate);const dt=Math.min((now-prev
     camera.position.lerpVectors(navMove.fromPos,navMove.toPos,t);controls.target.lerpVectors(navMove.fromTarget,navMove.toTarget,t);
     if(navMove.t>=1)navMove=null;
   }
-  controls.update();renderPOI();renderer.render(scene,camera);
+  controls.update();updateAdminReadout();renderPOI();renderer.render(scene,camera);
 }
 let playbackFrame=0;requestAnimationFrame(animate);
 $('fullscreenBtn').addEventListener('click',async()=>{if(!document.fullscreenElement)await $('app').requestFullscreen?.();else await document.exitFullscreen?.();});
@@ -501,6 +660,7 @@ $('helpBtn').addEventListener('click',()=>showHelp(true));$('closeHelp').addEven
 $('helpModal').addEventListener('click',e=>{if(e.target===$('helpModal'))showHelp(false);});
 window.addEventListener('keydown',e=>{
   if(e.target.matches('input,select,textarea,button')&&e.key!=='Escape')return;
+  if(e.key==='Escape' && activeBoundary){cancelBoundary();return;}
   if(e.key==='Escape'){if(!$('helpModal').hidden)showHelp(false);else dismissPanel();return;}
   if(e.key==='?'){showHelp(true);return;}
   if(e.code==='Space'){e.preventDefault();setPlaying(!playing);}
@@ -510,4 +670,6 @@ window.addEventListener('keydown',e=>{
   if(e.key==='End'){setPlaying(false);setFrame(P.frameCount);}
   if(e.key.toLowerCase()==='r')resetView();
 });
+renderTimeline();
+setFrame(0);
 initializeAssets();
