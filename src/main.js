@@ -5,9 +5,6 @@ import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 import { KTX2Loader } from 'three/addons/loaders/KTX2Loader.js';
 import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
 import { EXRLoader } from 'three/addons/loaders/EXRLoader.js';
-import { Line2 } from 'three/addons/lines/Line2.js';
-import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
-import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 import { PROJECT as P } from './config.js';
 import { createDemoSite, createDemoBarn } from './demo.js';
@@ -59,7 +56,6 @@ const barnBoundsSize=new THREE.Vector3();
 let navMove=null;const viewport=$('viewport');
 let prevTick=performance.now();
 let materialBackups=new Map();
-const wireOverlays=new Map();
 const shadowBase={hemisphere:2.15,sun:3.0};
 let hdrLevel=1,shadowLevel=.65;
 function applyLighting(){
@@ -85,29 +81,7 @@ function viewMaterial(original){
     new THREE.MeshBasicMaterial({color:'#ffffff',wireframe:true,side:original.side});
   m.userData.viewerTemp=true;return m;
 }
-function removeWireOverlays(){
-  for(const [mesh,line] of wireOverlays){
-    mesh.remove(line);
-    line.geometry.dispose();line.material.dispose();
-  }
-  wireOverlays.clear();
-}
-function addThickWire(mesh){
-  if(!mesh.geometry?.attributes?.position || wireOverlays.has(mesh))return;
-  // Skip extreme photogrammetry meshes to avoid duplicating huge vertex buffers.
-  if(mesh.geometry.attributes.position.count>250000)return;
-  const edges=new THREE.EdgesGeometry(mesh.geometry,18);
-  if(!edges.attributes.position?.count){edges.dispose();return;}
-  const coords=Array.from(edges.attributes.position.array);
-  edges.dispose();
-  const geometry=new LineGeometry();geometry.setPositions(coords);
-  const material=new LineMaterial({color:0xffffff,linewidth:2.5,worldUnits:false,transparent:false,depthTest:true});
-  material.resolution.set(Math.max(1,viewport.clientWidth),Math.max(1,viewport.clientHeight));
-  const line=new Line2(geometry,material);line.name='Viewer_Thick_Wire';line.frustumCulled=false;
-  mesh.add(line);wireOverlays.set(mesh,line);
-}
 function applyView(){
-  removeWireOverlays();
   for(const root of [baseScan,buildRoot,landscapeRoot])root.traverse(o=>{
     if(!o.isMesh || o.userData.isRoofExteriorLayer)return;
     if(!materialBackups.has(o))materialBackups.set(o,o.material);
@@ -115,7 +89,6 @@ function applyView(){
     const old=o.material;
     o.material=viewMaterial(original);
     if(old!==original){const arr=Array.isArray(old)?old:[old];arr.forEach(m=>{if(m?.userData?.viewerTemp)m.dispose();});}
-    if(view==='wireframe')addThickWire(o);
   });
   // Keep roof interior face orientation when changing display mode.
   for(const mesh of roofMeshes){
@@ -481,24 +454,98 @@ function surfaceHit(clientX,clientY){
 }
 function formatPoint(v){return `${v.x.toFixed(2)}, ${v.y.toFixed(2)}, ${v.z.toFixed(2)} m`;}
 function showBoundaryCoords(anchor){$('boundaryCoords').textContent=anchor?'Last point (world XYZ): '+formatPoint(anchorWorld(anchor)):'Click a surface to add a point';}
+// Coordinates are approximate: +X east, -Z north, in metres from the scene origin.
+// A true survey needs a georeferenced, north-aligned scene and a known local origin.
+const GEO_ORIGIN={lat:50.629045,lon:-1.226456};
+const EARTH_RADIUS=6378137;
+function boundaryCentroid(points){
+  const c=new THREE.Vector3();for(const v of points)c.add(v);
+  return points.length?c.multiplyScalar(1/points.length):c;
+}
+function boundaryGPS(p){
+  const latitude=GEO_ORIGIN.lat+(-p.z/EARTH_RADIUS)*180/Math.PI;
+  const longitude=GEO_ORIGIN.lon+(p.x/(EARTH_RADIUS*Math.cos(GEO_ORIGIN.lat*Math.PI/180)))*180/Math.PI;
+  return {latitude,longitude};
+}
+function boundaryArea(points){
+  if(points.length<3)return 0;
+  // Newell normal chooses a stable local 2D projection for triangulating a polygon.
+  const normal=new THREE.Vector3();
+  for(let i=0;i<points.length;i++){
+    const a=points[i],b=points[(i+1)%points.length];
+    normal.x+=(a.y-b.y)*(a.z+b.z);
+    normal.y+=(a.z-b.z)*(a.x+b.x);
+    normal.z+=(a.x-b.x)*(a.y+b.y);
+  }
+  if(normal.lengthSq()<1e-12)return 0;
+  normal.normalize();
+  const axis=new THREE.Vector3(1,0,0);
+  if(Math.abs(normal.dot(axis))>.9)axis.set(0,0,1);
+  const u=new THREE.Vector3().crossVectors(normal,axis).normalize();
+  const v=new THREE.Vector3().crossVectors(normal,u).normalize();
+  const origin=points[0];
+  const projected=points.map(p=>new THREE.Vector2(p.clone().sub(origin).dot(u),p.clone().sub(origin).dot(v)));
+  const triangles=THREE.ShapeUtils.triangulateShape(projected,[]);
+  let area=0;
+  for(const [a,b,c] of triangles){
+    const ab=points[b].clone().sub(points[a]);
+    const ac=points[c].clone().sub(points[a]);
+    area+=new THREE.Vector3().crossVectors(ab,ac).length()*.5;
+  }
+  return area;
+}
+function updateBoundaryLabel(b,coords){
+  if(!b.closed || coords.length<3)return;
+  if(!b.label){
+    b.label=document.createElement('div');
+    b.label.className='boundary-stat-label';
+    b.label.setAttribute('role','status');
+    $('boundaryLabels').appendChild(b.label);
+  }
+  const center=boundaryCentroid(coords),gps=boundaryGPS(center);
+  b.center=center;
+  b.label.innerHTML='<strong>BOUNDARY '+String(boundaries.indexOf(b)+1).padStart(2,'0')+'</strong>'+
+    '<span>'+boundaryArea(coords).toFixed(2)+' m² · surface area (approx.)</span>'+
+    '<span>'+gps.latitude.toFixed(6)+', '+gps.longitude.toFixed(6)+'</span>';
+  b.label.title='Estimated GPS using scene origin; metres and north alignment must be calibrated';
+}
 function rebuildBoundary(b){
-  // Clear previously generated tubes; a wider outer glow gives the line a luminous look.
+  // Regenerate only when geometry or animated positions change.
   for(const line of b.lines){boundaryRoot.remove(line);line.geometry.dispose();line.material.dispose();}
   b.lines=[];
   const coords=b.points.map(anchorWorld);
   b.handles.forEach((handle,i)=>{handle.position.copy(coords[i]);handle.visible=boundaryTool;});
+  updateBoundaryLabel(b,coords);
   if(coords.length<2)return;
-  const path=coords.map(v=>v.clone().add(new THREE.Vector3(0,.012,0)));
+  const path=coords.map(v=>v.clone().add(new THREE.Vector3(0,.025,0)));
   if(b.closed)path.push(path[0].clone());
-  const curve=new THREE.CatmullRomCurve3(path,b.closed,'centripetal',.01);
-  // Straight polygon edges; not splines: connect each pair individually.
   for(let i=0;i<path.length-1;i++){
     const a=path[i],z=path[i+1];if(a.distanceToSquared(z)<1e-10)continue;
     const segment=new THREE.LineCurve3(a,z);
-    for(const [radius,color,opacity] of [[.043,0x28e9bc,.22],[.012,BOUNDARY_COLOR,1]]){
+    for(const [radius,color,opacity] of [[.057,0x2ae8c2,.18],[.015,BOUNDARY_COLOR,.95]]){
       const geometry=new THREE.TubeGeometry(segment,1,radius,5,false);
-      const material=new THREE.MeshBasicMaterial({color,transparent:opacity<1,opacity,depthTest:false,depthWrite:false});
-      const mesh=new THREE.Mesh(geometry,material);mesh.renderOrder=700;b.lines.push(mesh);boundaryRoot.add(mesh);
+      const material=new THREE.MeshBasicMaterial({color,transparent:true,opacity,depthTest:false,depthWrite:false});
+      const mesh=new THREE.Mesh(geometry,material);mesh.renderOrder=700;
+      mesh.userData.boundaryLine=true;
+      b.lines.push(mesh);boundaryRoot.add(mesh);
+    }
+  }
+}
+function animateBoundaryLines(now){
+  for(const b of boundaries){
+    for(let i=0;i<b.lines.length;i++){
+      const line=b.lines[i],mat=line.material;
+      const glow=(i%2===0);
+      mat.opacity=glow?.14+.14*(.5+.5*Math.sin(now*.0023+i*.55)):.79+.21*(.5+.5*Math.sin(now*.0035+i*.34));
+    }
+    if(!b.label || !b.center)continue;
+    const loc=b.center.clone();loc.y+=.75;
+    loc.project(camera);
+    const inFront=loc.z>-1&&loc.z<1;
+    b.label.hidden=!inFront;
+    if(inFront){
+      b.label.style.left=((loc.x+1)*.5*viewport.clientWidth)+'px';
+      b.label.style.top=((1-loc.y)*.5*viewport.clientHeight)+'px';
     }
   }
 }
@@ -508,9 +555,9 @@ function addBoundaryPoint(b,hit){
   handle.userData.boundary=b;handle.userData.anchorIndex=b.points.length-1;handle.renderOrder=710;
   handle.position.copy(hit.world);boundaryRoot.add(handle);b.handles.push(handle);rebuildBoundary(b);showBoundaryCoords(anchor);
 }
-function removeBoundary(b){for(const handle of b.handles){boundaryRoot.remove(handle);handle.geometry.dispose();handle.material.dispose();}for(const line of b.lines){boundaryRoot.remove(line);line.geometry.dispose();line.material.dispose();}const i=boundaries.indexOf(b);if(i>=0)boundaries.splice(i,1);if(activeBoundary===b)activeBoundary=null;}
-function cancelBoundary(){if(activeBoundary){removeBoundary(activeBoundary);activeBoundary=null;}$('boundaryModeText').textContent='Boundary drawing';}
-function setBoundaryTool(on){boundaryTool=on;controls.enabled=!on;$('boundaryBtn').classList.toggle('active',on);$('boundaryBtn').setAttribute('aria-pressed',String(on));$('boundaryHud').hidden=!on;renderer.domElement.style.cursor=on?'crosshair':'';if(!on)cancelBoundary();for(const b of boundaries)b.handles.forEach(h=>h.visible=on);}
+function removeBoundary(b){for(const handle of b.handles){boundaryRoot.remove(handle);handle.geometry.dispose();handle.material.dispose();}for(const line of b.lines){boundaryRoot.remove(line);line.geometry.dispose();line.material.dispose();}const i=boundaries.indexOf(b);if(i>=0)boundaries.splice(i,1);if(b.label)b.label.remove();if(activeBoundary===b)activeBoundary=null;}
+function cancelBoundary(){if(activeBoundary){removeBoundary(activeBoundary);activeBoundary=null;}showBoundaryCoords(null);setBoundaryTool(false);}
+function setBoundaryTool(on){boundaryTool=on;controls.enabled=!on;$('boundaryBtn').classList.toggle('active',on);$('boundaryBtn').setAttribute('aria-pressed',String(on));$('boundaryHud').hidden=!on;renderer.domElement.style.cursor=on?'crosshair':'';if(!on && activeBoundary){removeBoundary(activeBoundary);activeBoundary=null;}for(const b of boundaries)b.handles.forEach(h=>h.visible=on);}
 $('boundaryBtn').addEventListener('click',()=>setBoundaryTool(!boundaryTool));
 $('clearBoundariesBtn').addEventListener('click',()=>{for(const b of [...boundaries])removeBoundary(b);showBoundaryCoords(null);});
 function pickHandle(clientX,clientY){
@@ -527,7 +574,7 @@ canvas.addEventListener('pointerdown',e=>{
   pointerStart={x:e.clientX,y:e.clientY};
   const handle=pickHandle(e.clientX,e.clientY);
   if(handle && activeBoundary && handle.userData.boundary===activeBoundary && handle.userData.anchorIndex===0 && activeBoundary.points.length>=3){
-    activeBoundary.closed=true;rebuildBoundary(activeBoundary);activeBoundary=null;$('boundaryModeText').textContent='Boundary completed · click to draw another';return;
+    activeBoundary.closed=true;rebuildBoundary(activeBoundary);activeBoundary=null;setBoundaryTool(false);return;
   }
   if(handle && !activeBoundary){draggingPoint=handle;canvas.setPointerCapture(e.pointerId);return;}
   const hit=surfaceHit(e.clientX,e.clientY);if(!hit)return;
@@ -629,7 +676,7 @@ $('copyCameraBtn').addEventListener('click',()=>{
   }).catch(()=>window.prompt('Copy camera coordinates:',message));
   else window.prompt('Copy camera coordinates:',message);
 });
-function onResize(){const w=viewport.clientWidth,h=viewport.clientHeight;camera.aspect=w/Math.max(1,h);camera.updateProjectionMatrix();renderer.setSize(w,h,false);for(const line of wireOverlays.values())line.material.resolution.set(w,h);}
+function onResize(){const w=viewport.clientWidth,h=viewport.clientHeight;camera.aspect=w/Math.max(1,h);camera.updateProjectionMatrix();renderer.setSize(w,h,false);}
 new ResizeObserver(onResize).observe(viewport);onResize();
 function animate(now){requestAnimationFrame(animate);const dt=Math.min((now-prevTick)/1000,.05);prevTick=now;
   if(stageJump){
@@ -650,7 +697,7 @@ function animate(now){requestAnimationFrame(animate);const dt=Math.min((now-prev
     camera.position.lerpVectors(navMove.fromPos,navMove.toPos,t);controls.target.lerpVectors(navMove.fromTarget,navMove.toTarget,t);
     if(navMove.t>=1)navMove=null;
   }
-  controls.update();updateAdminReadout();renderPOI();renderer.render(scene,camera);
+  controls.update();updateAdminReadout();renderPOI();animateBoundaryLines(now);renderer.render(scene,camera);
 }
 let playbackFrame=0;requestAnimationFrame(animate);
 $('fullscreenBtn').addEventListener('click',async()=>{if(!document.fullscreenElement)await $('app').requestFullscreen?.();else await document.exitFullscreen?.();});
@@ -660,7 +707,7 @@ $('helpBtn').addEventListener('click',()=>showHelp(true));$('closeHelp').addEven
 $('helpModal').addEventListener('click',e=>{if(e.target===$('helpModal'))showHelp(false);});
 window.addEventListener('keydown',e=>{
   if(e.target.matches('input,select,textarea,button')&&e.key!=='Escape')return;
-  if(e.key==='Escape' && activeBoundary){cancelBoundary();return;}
+  if(e.key==='Escape' && boundaryTool){cancelBoundary();return;}
   if(e.key==='Escape'){if(!$('helpModal').hidden)showHelp(false);else dismissPanel();return;}
   if(e.key==='?'){showHelp(true);return;}
   if(e.code==='Space'){e.preventDefault();setPlaying(!playing);}
