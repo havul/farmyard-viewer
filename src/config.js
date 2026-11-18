@@ -26,7 +26,7 @@ export const PROJECT = {
   placement: {
     landscape: { position: [0, 0, 0], rotation: [0, 0, 0], scale: 1 },
     scan: { position: [0, 0, 0], rotation: [0, 0, 0], scale: 1 },
-    construction: { position: [-6, -2.5, 6], rotation: [0, Math.PI, 0], scale: 1 }, // preserve your measured position from current live config
+    construction: { position: [-5, -2.5, 15], rotation: [0, Math.PI, 0], scale: 1 }, // preserve your measured position from current live config
   },
 camera: {
   position: [-12.44, 16.99, 27.01],
